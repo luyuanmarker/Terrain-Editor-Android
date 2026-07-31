@@ -1,0 +1,43 @@
+# Android/Gradle
+.gradle/
+/build/
+/app/build/
+/local.properties
+
+# IDE
+*.iml
+.idea/
+*.ipr
+*.iws
+
+# macOS
+.DS_Store
+
+# Keystores and certificates
+*.jks
+*.keystore
+*.pem
+*.p12
+*.crt
+*.key
+
+# Backups and temp
+*.bak
+*.swp
+*~
+
+# APKs
+*.apk
+
+# Generated outputs
+app/build/
+**/build/
+
+# Logs
+*.log
+
+# Ignore user-specific files
+*.keystore
+
+# Assets or saved maps (if you want to exclude large saved maps, uncomment)
+# app/src/main/assets/btl/
