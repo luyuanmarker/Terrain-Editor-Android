@@ -85,6 +85,9 @@ public class FileParser {
 
     public static byte[] saveAsBTL(MapData mapData) throws IOException {
         int totalTiles = mapData.width * mapData.height;
+        if (mapData.width < 1 || mapData.height < 1 || totalTiles > 65535) {
+            throw new IOException("BTL 地图尺寸无效（地块坐标最大支持 65535）");
+        }
 
         if (mapData.btlOriginalData != null) {
             // 有原始BTL：基于原始数据修改（支持扩展后的文件）
@@ -121,18 +124,21 @@ public class FileParser {
                     mapData.tiles.get(i).toBytes(result, terrainStart + i * 16);
                 }
             }
+            // 对已有 BTL 不重建其后的业务段。它们包含不同版本游戏的私有字段，
+            // 原样保留才是游戏兼容的最安全方式。
             return result;
         } else {
-            // 新建（随机生成）：生成游戏可用的BTL
-            // 完全参照游戏空白模板文件的二进制布局
+            // 新建战役：写出标准 BTL 的完整基础段。可选业务段计数均为 0，
+            // 因而不存在伪造或错位的未知记录；游戏和本编辑器都可按普通 BTL 读取。
             int headerSize = 128;
-            int legionCount = 2;  // 参考原始7x4地图也用的2
+            int legionCount = 2;
             int legionDataSize = legionCount * 300;
             int terrainStart = headerSize + legionDataSize;
             int terrainSize = totalTiles * 16;
             int adminSize = totalTiles * 2;
             int ownershipSize = totalTiles * 1;
-            int totalSize = terrainStart + terrainSize + adminSize + ownershipSize;
+            byte[] buildings = buildBuildings(mapData);
+            int totalSize = terrainStart + terrainSize + adminSize + ownershipSize + buildings.length;
 
             byte[] result = new byte[totalSize];
             ByteBuffer bb = ByteBuffer.wrap(result).order(ByteOrder.LITTLE_ENDIAN);
@@ -145,7 +151,7 @@ public class FileParser {
             bb.putInt(0x10, mapData.width);
             bb.putInt(0x14, mapData.height);
             bb.putInt(0x18, legionCount); // legionCount=2
-            bb.putInt(0x1C, 0);           // buildingCount
+            bb.putInt(0x1C, buildings.length / 32);
             bb.putInt(0x20, 0);           // armyCount
             bb.putInt(0x24, 0);           // planCount
             bb.putInt(0x28, 0);           // eventCount
@@ -169,9 +175,13 @@ public class FileParser {
             bb.putInt(0x78, 0);
             bb.putInt(0x7C, 0);           // airSupportCount=0
 
-            // ===== 军团数据段（全部填0）=====
-            // 地形数据起始 = 128 + 2*300 = 728
-            // 军团数据段全0，游戏不加载空军团时不会崩溃
+            // ===== 军团数据段 =====
+            // 保留两个有效阵营槽位，其他科技、资源默认均为 0。
+            // 这样空白战役可以在游戏数据或后续编辑器功能中继续填充。
+            bb.putInt(0x80, 1);           // 第一军团序号
+            bb.putInt(0x84, 1);           // 英国（国家 ID 1）
+            bb.putInt(0x80 + 300, 2);     // 第二军团序号
+            bb.putInt(0x84 + 300, 3);     // 德国（国家 ID 3）
 
             // ===== 地形数据（16字节/格）=====
             for (int i = 0; i < totalTiles; i++) {
@@ -197,8 +207,120 @@ public class FileParser {
                 result[ownershipStart + i] = (byte)0xFF;
             }
 
+            System.arraycopy(buildings, 0, result, ownershipStart + ownershipSize, buildings.length);
+
             return result;
         }
+    }
+
+    /**
+     * 从正常 BTL 的固定头部和军团段新建空战役。
+     * 所有计数型业务段均为 0；因此文件在归属数组后结束，不会残留模板的单位、建筑、
+     * 事件或未知尾部记录。地形统一使用模板中已有的平原记录。
+     */
+    public static MapData createEmptyBtlFromTemplate(byte[] template, String fileName, int newWidth, int newHeight)
+            throws IOException {
+        if (newWidth < 3 || newWidth > 200 || newHeight < 3 || newHeight > 200) {
+            throw new IOException("地图宽高范围为 3–200");
+        }
+        BtlHeaderInfo h = parseBTLHeader(template);
+        int oldTotal = h.width * h.height;
+        if (h.width <= 0 || h.height <= 0 || h.terrainStart + oldTotal * 16 > template.length) {
+            throw new IOException("BTL 模板结构不完整");
+        }
+
+        int newTotal = newWidth * newHeight;
+        int newAdminStart = h.terrainStart + newTotal * 16;
+        int newOwnershipStart = newAdminStart + newTotal * 2;
+        int newBuildingStart = newOwnershipStart + newTotal;
+        // 0x44 / 0x48 对应的固定尾段未包含在已知字段表中。必须保留它，
+        // 否则官方编辑器虽能识别头部，却无法建立主数据并显示黑屏。
+        int fixedTailStart = h.buildingStart
+                + h.buildingCount * 32
+                + h.armyCount * 48
+                + h.planCount * 16
+                + h.eventCount * 44
+                + h.weatherCount * 16
+                + h.reinforceCount * 80
+                + h.airstrikeCount * 20
+                + h.mineCount * 12
+                + h.strategyCount * 16
+                + h.airSupportCount * 16;
+        if (fixedTailStart > template.length) throw new IOException("模板固定尾段越界");
+        byte[] result = new byte[newBuildingStart + (template.length - fixedTailStart)];
+
+        // 头部和军团段是模板的固定业务数据，完整复制。
+        System.arraycopy(template, 0, result, 0, h.terrainStart);
+
+        // 找到模板中实际使用的平原地块（BTL 中平原主地形组为 0）。
+        byte[] fillTile = new byte[16];
+        boolean foundPlain = false;
+        for (int i = 0; i < oldTotal; i++) {
+            int offset = h.terrainStart + i * 16;
+            // 标准平原：主地形 00 FF，两层装饰均为 3F FF 且没有偏移或底层覆盖。
+            // 仅按 group=0 取第一个格会误取带道路/特殊装饰的平原，官方编辑器会黑屏。
+            if ((template[offset] & 0xFF) == 0
+                    && (template[offset + 1] & 0xFF) == 0xFF
+                    && (template[offset + 4] & 0xFF) == 0x3F
+                    && (template[offset + 5] & 0xFF) == 0xFF
+                    && (template[offset + 8] & 0xFF) == 0x3F
+                    && (template[offset + 9] & 0xFF) == 0xFF
+                    && template[offset + 2] == 0 && template[offset + 3] == 0
+                    && template[offset + 6] == 0 && template[offset + 7] == 0
+                    && template[offset + 10] == 0 && template[offset + 11] == 0
+                    && template[offset + 12] == 0 && template[offset + 13] == 0
+                    && template[offset + 14] == 0 && template[offset + 15] == 0) {
+                System.arraycopy(template, offset, fillTile, 0, 16);
+                foundPlain = true;
+                break;
+            }
+        }
+        if (!foundPlain) throw new IOException("模板中未找到平原地形记录");
+        for (int i = 0; i < newTotal; i++) {
+            System.arraycopy(fillTile, 0, result, h.terrainStart + i * 16, 16);
+            result[newAdminStart + i * 2] = 0;
+            result[newAdminStart + i * 2 + 1] = 0;
+            result[newOwnershipStart + i] = (byte) 0xFF;
+        }
+
+        ByteBuffer header = ByteBuffer.wrap(result).order(ByteOrder.LITTLE_ENDIAN);
+        header.putInt(0x10, newWidth);
+        header.putInt(0x14, newHeight);
+        header.putInt(0x58, newTotal);
+        // 清空所有有记录数组的计数；空 BTL 的末尾就是 ownership 数组。
+        header.putInt(0x1C, 0); // 建筑
+        header.putInt(0x20, 0); // 兵种
+        header.putInt(0x24, 0); // 方案
+        header.putInt(0x28, 0); // 事件
+        header.putInt(0x2C, 0); // 天气
+        header.putInt(0x3C, 0); // 援军
+        header.putInt(0x40, 0); // 空袭
+        header.putInt(0x68, 0); // 陷阱
+        header.putInt(0x70, 0); // 战略建设
+        header.putInt(0x7C, 0); // 空中支援
+
+        // 只复制固定尾段；建筑、单位等依据已清零的计数不会被复制。
+        System.arraycopy(template, fixedTailStart, result, newBuildingStart,
+                template.length - fixedTailStart);
+
+        return loadBTL(result, fileName);
+    }
+
+    /** 将编辑器中的建筑格子转换为紧凑的 32 字节 BTL 建筑记录。 */
+    private static byte[] buildBuildings(MapData mapData) {
+        int count = mapData.getBuildingCount();
+        byte[] records = new byte[count * 32];
+        int record = 0;
+        for (int i = 0; i < mapData.getTotalTiles(); i++) {
+            int type = mapData.buildingIds.get(i);
+            if (type <= 0) continue;
+            int offset = record++ * 32;
+            // 0x00: uint16 地块坐标；0x04: 建筑类型/名称代码（与 loadBTL 保持一致）。
+            records[offset] = (byte) (i & 0xFF);
+            records[offset + 1] = (byte) ((i >>> 8) & 0xFF);
+            records[offset + 4] = (byte) type;
+        }
+        return records;
     }
 
     // ========= BIN =========

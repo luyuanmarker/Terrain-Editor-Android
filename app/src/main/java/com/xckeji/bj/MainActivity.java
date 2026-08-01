@@ -55,6 +55,7 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -328,14 +329,22 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         root.addView(createTopBar());
 
         LinearLayout body = new LinearLayout(this);
-        body.setOrientation(LinearLayout.HORIZONTAL);
+        int screenWidthDp = (int) (getResources().getDisplayMetrics().widthPixels
+                / getResources().getDisplayMetrics().density);
+        boolean compactScreen = screenWidthDp < 700;
+        body.setOrientation(compactScreen ? LinearLayout.VERTICAL : LinearLayout.HORIZONTAL);
         body.setLayoutParams(new LinearLayout.LayoutParams(-1, 0, 1));
 
         hexMapView = new HexMapView(this);
-        hexMapView.setLayoutParams(new LinearLayout.LayoutParams(0, -1, 0.65f));
+        hexMapView.setLayoutParams(compactScreen
+                ? new LinearLayout.LayoutParams(-1, 0, 0.62f)
+                : new LinearLayout.LayoutParams(0, -1, 0.65f));
         hexMapView.setOnTileSelectListener(this);
 
         rightPanel = createRightPanel();
+        rightPanel.setLayoutParams(compactScreen
+                ? new LinearLayout.LayoutParams(-1, 0, 0.38f)
+                : new LinearLayout.LayoutParams(440, -1));
         body.addView(hexMapView);
         body.addView(rightPanel);
         root.addView(body);
@@ -344,9 +353,14 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
     }
 
     private View createTopBar() {
+        HorizontalScrollView toolbarScroll = new HorizontalScrollView(this);
+        toolbarScroll.setLayoutParams(new LinearLayout.LayoutParams(-1, 52));
+        toolbarScroll.setFillViewport(true);
+        toolbarScroll.setHorizontalScrollBarEnabled(false);
+
         LinearLayout bar = new LinearLayout(this);
         bar.setOrientation(LinearLayout.HORIZONTAL);
-        bar.setLayoutParams(new LinearLayout.LayoutParams(-1, 52));
+        bar.setLayoutParams(new HorizontalScrollView.LayoutParams(-2, 52));
         bar.setBackgroundColor(Color.parseColor("#1a1a3e"));
         bar.setPadding(8, 0, 8, 0);
         bar.setGravity(Gravity.CENTER_VERTICAL);
@@ -377,13 +391,8 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         });
         bar.addView(sfxBtn);
 
-        // 中间弹性空间
-        View spacerMiddle = new View(this);
-        spacerMiddle.setLayoutParams(new LinearLayout.LayoutParams(0, 1, 1));
-        bar.addView(spacerMiddle);
-
-        // 右侧：打开、保存、随机地形、预览、底图、图填、遮罩
-        String[] labels = {"打开","保存","随机地形","预览","底图","图填","遮罩"};
+        // 工具栏可横向滑动，手机窄屏时所有操作均可访问。
+        String[] labels = {"新建BTL","打开","保存","预览","底图","图填","遮罩"};
         for (int i = 0; i < labels.length; i++) {
             final int a = i;
             Button btn = makeTopBtn(labels[i]);
@@ -392,7 +401,8 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
             if (i < labels.length - 1) bar.addView(spacer(4));
         }
 
-        return bar;
+        toolbarScroll.addView(bar);
+        return toolbarScroll;
     }
 
     private Button makeTopBtn(String text) {
@@ -415,9 +425,9 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
 
     private void topAction(int a) {
         switch (a) {
-            case 0: openFile(); break;
-            case 1: saveFile(); break;
-            case 2: randomizeTerrainDialog(); break;
+            case 0: newBtlMap(); break;
+            case 1: openFile(); break;
+            case 2: saveFile(); break;
             case 3: rightPanel.setVisibility(rightPanel.getVisibility() == View.GONE ? View.VISIBLE : View.GONE); break;
             case 4: importOverlay(); break;
             case 5: importGuideImage(); break;
@@ -1277,33 +1287,62 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         return "建筑"+id;
     }
 
-    private void newMap() {
+    /** 新建标准 BTL 战役。MapData 不附带原文件，保存时会由 FileParser 写出完整基础 BTL。 */
+    private void newBtlMap() {
         AlertDialog.Builder b = new AlertDialog.Builder(this);
-        b.setTitle("新建地图");
+        b.setTitle("新建战役 BTL");
         LinearLayout l = new LinearLayout(this);
         l.setOrientation(LinearLayout.VERTICAL);
         l.setPadding(40, 20, 40, 20);
         EditText wi = new EditText(this);
-        wi.setHint("宽度"); wi.setInputType(InputType.TYPE_CLASS_NUMBER); wi.setText("20");
+        wi.setHint("宽度（3–200）"); wi.setInputType(InputType.TYPE_CLASS_NUMBER); wi.setText("20");
         EditText hi = new EditText(this);
-        hi.setHint("高度"); hi.setInputType(InputType.TYPE_CLASS_NUMBER); hi.setText("15");
+        hi.setHint("高度（3–200）"); hi.setInputType(InputType.TYPE_CLASS_NUMBER); hi.setText("15");
         l.addView(wi); l.addView(hi);
         b.setView(l);
         b.setPositiveButton("创建", (d, w) -> {
-            int wv = Integer.parseInt(wi.getText().toString());
-            int hv = Integer.parseInt(hi.getText().toString());
-            if (wv < 3 || wv > 200 || hv < 3 || hv > 200) return;
-            mapData = new MapData(wv, hv);
-            currentFileName = "新地图" + wv + "x" + hv;
-            history.clear();
-            if (mapData != null) mapData.historyRef = history;
-            hexMapView.setMapData(mapData);
-            updateInfo();
-            blockIdText.setText("未选中");
-            selectedInfo.setText("点击地图上的格子开始编辑");
+            try {
+                int wv = Integer.parseInt(wi.getText().toString());
+                int hv = Integer.parseInt(hi.getText().toString());
+                // BTL 内的地块坐标为 uint16；200×200 也在安全范围内。
+                if (wv < 3 || wv > 200 || hv < 3 || hv > 200) {
+                    Toast.makeText(this, "宽高范围为 3–200", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                // 使用用户验证可正常进入游戏的战役模板；其头部中含有未公开的固定字段。
+                byte[] template = readAssetBytes("templates/stage10103.btl");
+                mapData = FileParser.createEmptyBtlFromTemplate(template,
+                    "新战役_" + wv + "x" + hv + ".btl", wv, hv);
+                currentFileName = "新战役_" + wv + "x" + hv + ".btl";
+                history.clear();
+                mapData.historyRef = history;
+                hexMapView.setMapData(mapData);
+                updateInfo();
+                blockIdText.setText("未选中");
+                selectedInfo.setText("已创建空白平原战役；编辑后直接保存为 .btl");
+            } catch (Exception e) {
+                Toast.makeText(this, "新建失败: " + e.getMessage(), Toast.LENGTH_LONG).show();
+            }
         });
         b.setNegativeButton("取消", null);
         b.show();
+    }
+
+    private byte[] readAssetBytes(String assetName) throws IOException {
+        InputStream input = getAssets().open(assetName);
+        try {
+            byte[] bytes = new byte[input.available()];
+            int offset = 0;
+            while (offset < bytes.length) {
+                int read = input.read(bytes, offset, bytes.length - offset);
+                if (read < 0) break;
+                offset += read;
+            }
+            if (offset != bytes.length) throw new IOException("模板读取不完整");
+            return bytes;
+        } finally {
+            input.close();
+        }
     }
 
     // ===== 随机化地形（在现有地图上按概率替换） =====
