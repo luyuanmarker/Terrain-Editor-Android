@@ -382,8 +382,8 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         spacerMiddle.setLayoutParams(new LinearLayout.LayoutParams(0, 1, 1));
         bar.addView(spacerMiddle);
 
-        // 右侧：打开、保存、随机生成、随机化地形、预览、底图、图填、遮罩
-        String[] labels = {"打开","保存","随机生成","随机地形","预览","底图","图填","遮罩"};
+        // 右侧：打开、保存、随机地形、预览、底图、图填、遮罩
+        String[] labels = {"打开","保存","随机地形","预览","底图","图填","遮罩"};
         for (int i = 0; i < labels.length; i++) {
             final int a = i;
             Button btn = makeTopBtn(labels[i]);
@@ -417,12 +417,11 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         switch (a) {
             case 0: openFile(); break;
             case 1: saveFile(); break;
-            case 2: randomMap(); break;
-            case 3: randomizeTerrainDialog(); break;
-            case 4: rightPanel.setVisibility(rightPanel.getVisibility() == View.GONE ? View.VISIBLE : View.GONE); break;
-            case 5: importOverlay(); break;
-            case 6: importGuideImage(); break;
-            case 7: toggleOverlay(); break;
+            case 2: randomizeTerrainDialog(); break;
+            case 3: rightPanel.setVisibility(rightPanel.getVisibility() == View.GONE ? View.VISIBLE : View.GONE); break;
+            case 4: importOverlay(); break;
+            case 5: importGuideImage(); break;
+            case 6: toggleOverlay(); break;
         }
     }
 
@@ -1302,249 +1301,6 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
             updateInfo();
             blockIdText.setText("未选中");
             selectedInfo.setText("点击地图上的格子开始编辑");
-        });
-        b.setNegativeButton("取消", null);
-        b.show();
-    }
-
-    private void randomMap() {
-        // 地形配置列表：[ID, 颜色, 默认密度]
-        int[][] terrainDefs = {
-            {0, 0xFFf0f0f0, 30},  // 平地
-            {1, 0xFF4f81c7, 20},  // 海洋
-            {2, 0xFFf4e7c3, 10},  // 沙漠
-            {3, 0xFFe0f7fa, 5},  // 矮雪山
-            {4, 0xFFb2ebf2, 5},  // 中雪山
-            {6, 0xFF8d6e63, 10},  // 矮土山
-            {9, 0xFF81c784, 8},  // 矮绿山
-            {10, 0xFF4caf50, 8}, // 中绿山
-            {11, 0xFF388e3c, 6}, // 高绿山
-            {15, 0xFF689f38, 3}, // 仙人掌
-            {16, 0xFF2e7d32, 15}, // 阔叶林
-            {20, 0xFF1b5e20, 8}, // 针叶林
-            {22, 0xFF1b5e20, 5}, // 热带森林
-            {26, 0xFFffd54f, 6}, // 农田
-            {5, 0xFF80deea, 3},  // 高雪山
-            {7, 0xFF6d4c41, 3},  // 中土山
-            {8, 0xFF4e342e, 2},  // 高土山
-            {12, 0xFFffcc80, 3}, // 矮沙山
-            {13, 0xFFffb74d, 3}, // 中沙山
-            {14, 0xFFff9800, 2}, // 高沙山
-            {18, 0xFFa5d6a7, 3}, // 积雪阔叶林
-            {21, 0xFFb2dfdb, 3}, // 积雪针叶林
-            {30, 0xFF795548, 2}, // 坑
-            {31, 0xFFffffff, 3}, // 雪地
-        };
-        String[] terrainNames = {"平地","海洋","沙漠","矮雪山","中雪山","矮土山","矮绿山","中绿山","高绿山","仙人掌","阔叶林","针叶林","热带森林","农田","高雪山","中土山","高土山","矮沙山","中沙山","高沙山","积雪阔叶林","积雪针叶林","坑","雪地"};
-        String[] terrainDisplay = {"平地","海洋","沙漠","矮雪山","中雪山","矮土山","矮绿山","中绿山","高绿山","仙人掌","阔叶林","针叶林","热带森林","农田","高雪山","中土山","高土山","矮沙山","中沙山","高沙山","积雪阔叶林","积雪针叶林","坑","雪地"};
-
-        AlertDialog.Builder b = new AlertDialog.Builder(this);
-        b.setTitle("随机生成地图");
-
-        ScrollView sv = new ScrollView(this);
-        LinearLayout l = new LinearLayout(this);
-        l.setOrientation(LinearLayout.VERTICAL);
-        l.setPadding(40, 16, 40, 16);
-
-        // 宽高
-        LinearLayout sizeRow = new LinearLayout(this);
-        sizeRow.setOrientation(LinearLayout.HORIZONTAL);
-        EditText wi = new EditText(this);
-        wi.setHint("宽度"); wi.setInputType(InputType.TYPE_CLASS_NUMBER); wi.setText("20");
-        wi.setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1));
-        EditText hi = new EditText(this);
-        hi.setHint("高度"); hi.setInputType(InputType.TYPE_CLASS_NUMBER); hi.setText("15");
-        hi.setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1));
-        sizeRow.addView(wi);
-        View spc = new View(this); spc.setLayoutParams(new LinearLayout.LayoutParams(12, 1));
-        sizeRow.addView(spc);
-        sizeRow.addView(hi);
-        l.addView(sizeRow);
-
-        // 种子输入
-        EditText seedInput = new EditText(this);
-        seedInput.setHint("随机种子"); seedInput.setInputType(InputType.TYPE_CLASS_NUMBER);
-        seedInput.setText(String.valueOf(System.currentTimeMillis() & 0x7FFFFFFF));
-        l.addView(seedInput);
-
-        // 海洋边框
-        CheckBox oceanCb = new CheckBox(this);
-        oceanCb.setText("海洋边框");
-        oceanCb.setChecked(true);
-        l.addView(oceanCb);
-
-        // 平滑地形
-        CheckBox smoothCb = new CheckBox(this);
-        smoothCb.setText("平滑地形");
-        smoothCb.setChecked(true);
-        l.addView(smoothCb);
-
-        // 分隔
-        View dv = new View(this);
-        dv.setLayoutParams(new LinearLayout.LayoutParams(-1, 1));
-        dv.setBackgroundColor(0xFFe5e7eb);
-        l.addView(dv);
-
-        TextView tv = new TextView(this);
-        tv.setText("地形种类（勾选=启用，滑块=密度）");
-        tv.setTextSize(12);
-        tv.setPadding(0, 8, 0, 4);
-        tv.setTextColor(0xFF374151);
-        l.addView(tv);
-
-        boolean[] enabledFlags = new boolean[terrainDefs.length];
-        double[] densityValues = new double[terrainDefs.length];
-        for (int i = 0; i < terrainDefs.length; i++) {
-            enabledFlags[i] = terrainDefs[i][0] == 0 || terrainDefs[i][0] == 1 || terrainDefs[i][0] == 2 || terrainDefs[i][0] == 6 || terrainDefs[i][0] == 9 || terrainDefs[i][0] == 16;
-            densityValues[i] = terrainDefs[i][2];
-        }
-
-        for (int i = 0; i < terrainDefs.length; i++) {
-            final int idx = i;
-            // 每一行：checkbox + 色块 + 名称 + 滑块 + 数值
-            LinearLayout row = new LinearLayout(this);
-            row.setOrientation(LinearLayout.HORIZONTAL);
-            row.setLayoutParams(new LinearLayout.LayoutParams(-1, -2));
-            row.setGravity(Gravity.CENTER_VERTICAL);
-            row.setPadding(0, 2, 0, 2);
-
-            CheckBox cb = new CheckBox(this);
-            cb.setChecked(enabledFlags[i]);
-            cb.setOnCheckedChangeListener((btn, isChecked) -> enabledFlags[idx] = isChecked);
-            row.addView(cb);
-
-            // 色块
-            View colorBlock = new View(this);
-            colorBlock.setLayoutParams(new LinearLayout.LayoutParams(14, 14));
-            colorBlock.setBackgroundColor(terrainDefs[i][1]);
-            row.addView(colorBlock);
-
-            // 名称
-            TextView nameTv = new TextView(this);
-            nameTv.setText(terrainDisplay[i]);
-            nameTv.setTextSize(10);
-            nameTv.setTextColor(0xFF374151);
-            nameTv.setLayoutParams(new LinearLayout.LayoutParams(-2, -2));
-            nameTv.setPadding(6, 0, 0, 0);
-            row.addView(nameTv);
-
-            // 密度滑块
-            android.widget.SeekBar sb = new android.widget.SeekBar(this);
-            sb.setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1));
-            sb.setMax(100);
-            sb.setProgress(densityValues[i] > 0 ? Math.min((int)densityValues[i], 100) : 5);
-            final TextView densityLabel = new TextView(this);
-            densityLabel.setText(String.valueOf(sb.getProgress()));
-            densityLabel.setTextSize(9);
-            densityLabel.setTextColor(0xFF6b7280);
-            densityLabel.setMinWidth(24);
-            densityLabel.setGravity(Gravity.CENTER);
-            sb.setOnSeekBarChangeListener(new android.widget.SeekBar.OnSeekBarChangeListener() {
-                @Override public void onProgressChanged(android.widget.SeekBar seekBar, int progress, boolean fromUser) {
-                    densityValues[idx] = Math.max(0.1, progress);
-                    densityLabel.setText(String.valueOf(progress));
-                }
-                @Override public void onStartTrackingTouch(android.widget.SeekBar seekBar) {}
-                @Override public void onStopTrackingTouch(android.widget.SeekBar seekBar) {}
-            });
-            row.addView(sb);
-            row.addView(densityLabel);
-
-            l.addView(row);
-        }
-
-        sv.addView(l);
-        b.setView(sv);
-
-        b.setPositiveButton("生成", (d, w) -> {
-            int wv, hv;
-            try {
-                wv = Integer.parseInt(wi.getText().toString());
-                hv = Integer.parseInt(hi.getText().toString());
-            } catch (Exception e) { wv = 20; hv = 15; }
-            if (wv < 3 || wv > 200 || hv < 3 || hv > 200) {
-                Toast.makeText(this, "尺寸范围 3-200", Toast.LENGTH_SHORT).show();
-                return;
-            }
-
-            java.util.List<RandomMapGenerator.Config> configs = new java.util.ArrayList<>();
-            for (int i = 0; i < terrainDefs.length; i++) {
-                configs.add(new RandomMapGenerator.Config(
-                    terrainDefs[i][0], terrainDisplay[i], terrainDefs[i][1],
-                    enabledFlags[i], Math.max(0.1, densityValues[i])));
-            }
-
-            int seed;
-            try { seed = Integer.parseInt(seedInput.getText().toString()); }
-            catch (Exception e) { seed = (int)(System.currentTimeMillis() & 0x7FFFFFFF); }
-            boolean addOcean = oceanCb.isChecked();
-            boolean smooth = smoothCb.isChecked();
-            java.util.List<Integer> terrainGroups = RandomMapGenerator.generate(
-                wv, hv, seed, configs, addOcean, smooth);
-
-            // 变体ID映射
-            java.util.Map<Integer, int[]> variantRanges = new java.util.HashMap<>();
-            variantRanges.put(2, new int[]{1, 9});
-            variantRanges.put(3, new int[]{1, 11});
-            variantRanges.put(4, new int[]{1, 11});
-            variantRanges.put(5, new int[]{1, 5});
-            variantRanges.put(6, new int[]{1, 11});
-            variantRanges.put(7, new int[]{1, 11});
-            variantRanges.put(8, new int[]{1, 5});
-            variantRanges.put(9, new int[]{1, 11});
-            variantRanges.put(10, new int[]{1, 11});
-            variantRanges.put(11, new int[]{1, 5});
-            variantRanges.put(12, new int[]{1, 11});
-            variantRanges.put(13, new int[]{1, 11});
-            variantRanges.put(14, new int[]{1, 5});
-            variantRanges.put(15, new int[]{1, 9});
-            variantRanges.put(16, new int[]{1, 9});
-            variantRanges.put(18, new int[]{1, 9});
-            variantRanges.put(20, new int[]{1, 9});
-            variantRanges.put(21, new int[]{1, 9});
-            variantRanges.put(22, new int[]{1, 9});
-            variantRanges.put(30, new int[]{1, 9});
-            variantRanges.put(31, new int[]{1, 9});
-            variantRanges.put(26, new int[]{1, 1});
-
-            java.util.Random rng = new java.util.Random(seed);
-            mapData = new MapData(wv, hv);
-            for (int i = 0; i < terrainGroups.size(); i++) {
-                int g = terrainGroups.get(i);
-                TerrainTile tile = mapData.tiles.get(i);
-                tile.bmTerrain1Group = g;
-                int[] range = variantRanges.get(g);
-                if (range != null && range.length >= 2) {
-                    tile.bmTerrain1Id = range[0] + rng.nextInt(range[1] - range[0] + 1);
-                } else {
-                    tile.bmTerrain1Id = 1;
-                }
-                tile.bmTerrain1X = 0;
-                tile.bmTerrain1Y = 0;
-                // decoration/floor 字段写合法值，游戏读 BTL 时不会崩
-                tile.decoration1Group = (g == 0) ? 0 : g;
-                tile.decoration1Id = 1;
-                tile.decoration2Group = 0;
-                tile.decoration2Id = 0;
-                tile.floorGroup = (g == 1) ? 0 : 255;
-                tile.floorId = (g == 1) ? 0 : 1;
-                tile.floorX = 0;
-                tile.floorY = 0;
-            }
-
-            // 生成完整 BTL 原始数据，确保保存时走正确分支
-            try {
-                mapData.btlOriginalData = com.xckeji.bj.file.FileParser.saveAsBTL(mapData);
-            } catch (Exception ignored) {}
-
-            currentFileName = "随机地图" + wv + "x" + hv;
-            history.clear();
-            if (mapData != null) mapData.historyRef = history;
-            hexMapView.setMapData(mapData);
-            updateInfo();
-            blockIdText.setText("未选中");
-            selectedInfo.setText("随机生成: " + wv + "x" + hv);
-            Toast.makeText(this, "随机地图已生成 " + wv + "x" + hv, Toast.LENGTH_SHORT).show();
         });
         b.setNegativeButton("取消", null);
         b.show();
