@@ -65,12 +65,18 @@ public class RandomMapGenerator {
      * @param probability 0~1 的概率（0=不变，1=全改）
      * @param allowedTerrainIds 允许出现的地形 ID 列表（不能为空）
      * @param seed 随机种子
+     * @param buildingIds 建筑列表（有建筑的格子跳过）
+     * @param includeSea 是否连海洋一起随机（默认 false 跳过海洋）
+     * @param terrainPatterns 每组常见的完整 16 字节模式（组 → 模式列表），
+     *                        优先从中挑选合法贴图；没有则用干净的标准地形兜底
      */
     public static void randomizeTerrain(java.util.List<TerrainTile> originalTiles,
                                          double probability,
                                          java.util.List<Integer> allowedTerrainIds,
                                          int seed,
-                                         java.util.List<Integer> buildingIds) {
+                                         java.util.List<Integer> buildingIds,
+                                         boolean includeSea,
+                                         java.util.Map<Integer, java.util.List<byte[]>> terrainPatterns) {
         if (originalTiles == null || originalTiles.isEmpty()) {
             throw new RuntimeException("地图数据为空");
         }
@@ -78,54 +84,24 @@ public class RandomMapGenerator {
             throw new RuntimeException("至少选择一种地形");
         }
         java.util.Random rng = new java.util.Random(seed);
-        // 地形变体范围（variant 范围）
-        java.util.Map<Integer, int[]> variantRanges = new java.util.HashMap<>();
-        variantRanges.put(2, new int[]{1, 9});
-        variantRanges.put(3, new int[]{1, 11});
-        variantRanges.put(4, new int[]{1, 11});
-        variantRanges.put(5, new int[]{1, 5});
-        variantRanges.put(6, new int[]{1, 11});
-        variantRanges.put(7, new int[]{1, 11});
-        variantRanges.put(8, new int[]{1, 5});
-        variantRanges.put(9, new int[]{1, 11});
-        variantRanges.put(10, new int[]{1, 11});
-        variantRanges.put(11, new int[]{1, 5});
-        variantRanges.put(12, new int[]{1, 11});
-        variantRanges.put(13, new int[]{1, 11});
-        variantRanges.put(14, new int[]{1, 5});
-        variantRanges.put(15, new int[]{1, 9});
-        variantRanges.put(16, new int[]{1, 9});
-        variantRanges.put(18, new int[]{1, 9});
-        variantRanges.put(20, new int[]{1, 9});
-        variantRanges.put(21, new int[]{1, 9});
-        variantRanges.put(22, new int[]{1, 9});
-        variantRanges.put(30, new int[]{1, 9});
-        variantRanges.put(31, new int[]{1, 9});
-        variantRanges.put(26, new int[]{1, 1});
 
         for (int i = 0; i < originalTiles.size(); i++) {
             TerrainTile tile = originalTiles.get(i);
-            // 跳过海洋
-            if (tile.bmTerrain1Group == 1) continue;
+            // 默认跳过海洋（可选连海洋一起随机）
+            if (!includeSea && tile.bmTerrain1Group == 1) continue;
             // 跳过有建筑的地块
             if (buildingIds != null && i < buildingIds.size() && buildingIds.get(i) != 0) continue;
 
             if (rng.nextDouble() < probability) {
                 int newGroup = allowedTerrainIds.get(rng.nextInt(allowedTerrainIds.size()));
-                tile.bmTerrain1Group = newGroup;
-                // 随机变体 ID：从 variantRanges 取范围，没有定义的组用 0
-                int[] range = variantRanges.get(newGroup);
-                if (range != null && range.length >= 2) {
-                    tile.bmTerrain1Id = range[0] + rng.nextInt(range[1] - range[0] + 1);
+                // 优先套用该地图里该地形组的真实模式（整格替换，保证游戏能识别）
+                java.util.List<byte[]> pats = terrainPatterns == null ? null : terrainPatterns.get(newGroup);
+                if (pats != null && !pats.isEmpty()) {
+                    tile.parseFromBytes(pats.get(rng.nextInt(pats.size())), 0);
                 } else {
-                    tile.bmTerrain1Id = 0;
+                    // 兜底：干净的标准地形（组 + 标准ID + 覆盖层3F FF）
+                    tile.setTerrain(newGroup);
                 }
-                // 重置 X/Y 偏移，避免旧值指向不存在的资源
-                tile.bmTerrain1X = 0;
-                tile.bmTerrain1Y = 0;
-                // 注意：不修改装饰层(decoration)和地板层(floor)字段。
-                // 游戏加载 BTL 时会读取这些字段，强制清零会导致游戏闪退。
-                // 原装饰/地板数据保留，游戏会自动忽略不适合新地形的装饰。
             }
         }
     }

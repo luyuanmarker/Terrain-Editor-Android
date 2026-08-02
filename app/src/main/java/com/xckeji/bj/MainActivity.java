@@ -26,14 +26,19 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
+import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.CompoundButton;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.RadioButton;
+import android.widget.RadioGroup;
 import android.widget.ScrollView;
+import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 import android.widget.ToggleButton;
@@ -72,6 +77,9 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
     private MapData mapData;
     private OperationHistory history = new OperationHistory();
     private String currentFileName = "未命名地图";
+    // 截取模式：点击两个角定义裁剪区域
+    private boolean cropSelecting = false;
+    private int cropAx = -1, cropAy = -1;
     private String customSavePath = "";
     private Map<Integer, Bitmap> terrainThumbs = new HashMap<>();
     private Map<Integer, Bitmap> buildingThumbs = new HashMap<>();
@@ -331,25 +339,224 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         LinearLayout body = new LinearLayout(this);
         int screenWidthDp = (int) (getResources().getDisplayMetrics().widthPixels
                 / getResources().getDisplayMetrics().density);
-        boolean compactScreen = screenWidthDp < 700;
-        body.setOrientation(compactScreen ? LinearLayout.VERTICAL : LinearLayout.HORIZONTAL);
+        body.setOrientation(LinearLayout.VERTICAL);
         body.setLayoutParams(new LinearLayout.LayoutParams(-1, 0, 1));
 
         hexMapView = new HexMapView(this);
-        hexMapView.setLayoutParams(compactScreen
-                ? new LinearLayout.LayoutParams(-1, 0, 0.62f)
-                : new LinearLayout.LayoutParams(0, -1, 0.65f));
+        hexMapView.setLayoutParams(new LinearLayout.LayoutParams(-1, -1));
         hexMapView.setOnTileSelectListener(this);
-
-        rightPanel = createRightPanel();
-        rightPanel.setLayoutParams(compactScreen
-                ? new LinearLayout.LayoutParams(-1, 0, 0.38f)
-                : new LinearLayout.LayoutParams(440, -1));
         body.addView(hexMapView);
-        body.addView(rightPanel);
-        root.addView(body);
-        root.addView(createBottomBar());
+
+        // 用 FrameLayout 包裹地图区，便于放置左侧浮动按钮与可拖动的右面板
+        FrameLayout bodyFrame = new FrameLayout(this);
+        bodyFrame.setLayoutParams(new LinearLayout.LayoutParams(-1, 0, 1));
+        body.setLayoutParams(new FrameLayout.LayoutParams(-1, -1));
+        bodyFrame.addView(body);
+        int density = (int) getResources().getDisplayMetrics().density;
+        int screenWidthPx = getResources().getDisplayMetrics().widthPixels;
+
+        // 可拖动、左右吸附的浮动右面板
+        rightPanel = createRightPanel();
+        int panelW = (int) (Math.min(320, screenWidthDp - 32) * density);
+        FrameLayout.LayoutParams rpLp = new FrameLayout.LayoutParams(panelW, -1,
+                Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        rpLp.rightMargin = 8 * density;
+        bodyFrame.addView(rightPanel, rpLp);
+        setupDraggablePanel(rightPanel, screenWidthPx, density);
+
+        // 左侧整合面板：文件（打开/保存）+ 声音（音乐/音效）
+        LinearLayout leftPanel = new LinearLayout(this);
+        leftPanel.setOrientation(LinearLayout.VERTICAL);
+        leftPanel.setPadding(10, 10, 10, 10);
+        android.graphics.drawable.GradientDrawable panelBg = new android.graphics.drawable.GradientDrawable();
+        panelBg.setColor(0xE616213E);
+        panelBg.setCornerRadius(14 * density);
+        leftPanel.setBackground(panelBg);
+
+        TextView fileLabel = new TextView(this);
+        fileLabel.setText("文件");
+        fileLabel.setTextSize(11);
+        fileLabel.setTypeface(null, android.graphics.Typeface.BOLD);
+        fileLabel.setTextColor(Color.WHITE);
+        fileLabel.setGravity(Gravity.CENTER);
+        fileLabel.setPadding(4, 0, 4, 4);
+        leftPanel.addView(fileLabel);
+        Button floatOpen = makeFloatBtn("打开", 0xFF1E5FA8);
+        floatOpen.setOnClickListener(v -> openFile());
+        Button floatSave = makeFloatBtn("保存", 0xFF1E5FA8);
+        floatSave.setOnClickListener(v -> saveFile());
+        leftPanel.addView(floatOpen);
+        leftPanel.addView(floatSave);
+
+        View divider = new View(this);
+        LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(-1, 1);
+        dlp.topMargin = 8 * density;
+        dlp.bottomMargin = 8 * density;
+        divider.setLayoutParams(dlp);
+        divider.setBackgroundColor(0x55FFFFFF);
+        leftPanel.addView(divider);
+
+        TextView soundLabel = new TextView(this);
+        soundLabel.setText("声音");
+        soundLabel.setTextSize(11);
+        soundLabel.setTypeface(null, android.graphics.Typeface.BOLD);
+        soundLabel.setTextColor(Color.WHITE);
+        soundLabel.setGravity(Gravity.CENTER);
+        soundLabel.setPadding(4, 4, 4, 4);
+        leftPanel.addView(soundLabel);
+        Button floatMusic = makeFloatBtn(musicEnabled ? "关闭音乐" : "开启音乐", 0xFF2F6B3A);
+        floatMusic.setOnClickListener(v -> {
+            musicEnabled = !musicEnabled;
+            floatMusic.setText(musicEnabled ? "关闭音乐" : "开启音乐");
+            getSharedPreferences("wc4_editor_prefs", MODE_PRIVATE)
+                    .edit().putBoolean("music_enabled", musicEnabled).apply();
+            if (musicEnabled && bgMusicPlayer != null) bgMusicPlayer.start();
+            else if (bgMusicPlayer != null) bgMusicPlayer.pause();
+        });
+        Button floatSfx = makeFloatBtn(sfxEnabled ? "关闭音效" : "开启音效", 0xFF2F6B3A);
+        floatSfx.setOnClickListener(v -> {
+            sfxEnabled = !sfxEnabled;
+            floatSfx.setText(sfxEnabled ? "关闭音效" : "开启音效");
+            getSharedPreferences("wc4_editor_prefs", MODE_PRIVATE)
+                    .edit().putBoolean("sfx_enabled", sfxEnabled).apply();
+        });
+        leftPanel.addView(floatMusic);
+        leftPanel.addView(floatSfx);
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(110 * density, -2,
+                Gravity.CENTER_VERTICAL | Gravity.LEFT);
+        lp.leftMargin = 8 * density;
+        bodyFrame.addView(leftPanel, lp);
+
+        // 底部左下角：交流群文字
+        TextView groupText = new TextView(this);
+        groupText.setText("地形编辑器交流群1001026138，进群获取新版本，全新功能全新布局！");
+        groupText.setTextColor(0xCCFFFFFF);
+        groupText.setTextSize(10);
+        groupText.setGravity(Gravity.LEFT);
+        groupText.setPadding(8 * density, 4 * density, 8 * density, 4 * density);
+        groupText.setBackgroundColor(0x66000000);
+        FrameLayout.LayoutParams gtLp = new FrameLayout.LayoutParams(-2, -2,
+                Gravity.BOTTOM | Gravity.LEFT);
+        gtLp.leftMargin = 6 * density;
+        gtLp.bottomMargin = 4 * density;
+        bodyFrame.addView(groupText, gtLp);
+
+        // 左上角：FPS / 设备 / 版本号
+        LinearLayout infoPanel = new LinearLayout(this);
+        infoPanel.setOrientation(LinearLayout.VERTICAL);
+        infoPanel.setPadding(6 * density, 4 * density, 6 * density, 4 * density);
+        infoPanel.setBackgroundColor(0x66000000);
+
+        TextView fpsView = new TextView(this);
+        fpsView.setText("FPS: --");
+        fpsView.setTextColor(0xCC00E676);
+        fpsView.setTextSize(10);
+        fpsView.setTypeface(null, android.graphics.Typeface.BOLD);
+        infoPanel.addView(fpsView);
+
+        TextView deviceView = new TextView(this);
+        deviceView.setText("设备: " + android.os.Build.MANUFACTURER + " " + android.os.Build.MODEL);
+        deviceView.setTextColor(0xCCFFFFFF);
+        deviceView.setTextSize(10);
+        infoPanel.addView(deviceView);
+
+        TextView versionView = new TextView(this);
+        versionView.setText("v1.3内测版");
+        versionView.setTextColor(0xCCFFFFFF);
+        versionView.setTextSize(10);
+        infoPanel.addView(versionView);
+
+        FrameLayout.LayoutParams infoLp = new FrameLayout.LayoutParams(-2, -2,
+                Gravity.TOP | Gravity.LEFT);
+        infoLp.leftMargin = 6 * density;
+        infoLp.topMargin = 6 * density;
+        bodyFrame.addView(infoPanel, infoLp);
+        startFpsCounter(fpsView);
+
+        root.addView(bodyFrame);
         setContentView(root);
+    }
+
+    /** 左上角 FPS 计数：每秒统计一次 Choreographer 帧回调次数。 */
+    private void startFpsCounter(final TextView fpsView) {
+        final long[] lastTime = {0};
+        final int[] frames = {0};
+        android.view.Choreographer.getInstance().postFrameCallback(new android.view.Choreographer.FrameCallback() {
+            @Override
+            public void doFrame(long frameTimeNanos) {
+                if (lastTime[0] == 0) {
+                    lastTime[0] = frameTimeNanos;
+                } else {
+                    frames[0]++;
+                    long elapsedMs = (frameTimeNanos - lastTime[0]) / 1_000_000L;
+                    if (elapsedMs >= 1000) {
+                        float fps = frames[0] * 1000f / elapsedMs;
+                        fpsView.setText(String.format(java.util.Locale.US, "FPS: %.1f", fps));
+                        frames[0] = 0;
+                        lastTime[0] = frameTimeNanos;
+                    }
+                }
+                android.view.Choreographer.getInstance().postFrameCallback(this);
+            }
+        });
+    }
+
+    /** 让右面板可通过顶部把手左右拖动，松手后吸附到最近的左/右边缘。 */
+    private void setupDraggablePanel(final LinearLayout panel, final int screenWidthPx, final int density) {
+        LinearLayout handle = new LinearLayout(this);
+        handle.setOrientation(LinearLayout.HORIZONTAL);
+        handle.setGravity(Gravity.CENTER);
+        handle.setBackgroundColor(Color.parseColor("#2f3d75"));
+        TextView grip = new TextView(this);
+        grip.setText("☰ 按住拖动 ← →");
+        grip.setTextColor(Color.WHITE);
+        grip.setTextSize(12);
+        grip.setPadding(0, 8 * density, 0, 8 * density);
+        handle.addView(grip);
+        panel.addView(handle, 0);
+
+        // down[0]=起始rawX, down[1]=起始translationX, down[2]=面板宽度
+        final int[] down = new int[3];
+        handle.setOnTouchListener((v, ev) -> {
+            switch (ev.getActionMasked()) {
+                case android.view.MotionEvent.ACTION_DOWN:
+                    down[0] = (int) ev.getRawX();
+                    down[1] = (int) panel.getTranslationX();
+                    down[2] = panel.getWidth();
+                    if (down[2] <= 0) {
+                        down[2] = ((FrameLayout.LayoutParams) panel.getLayoutParams()).width;
+                    }
+                    return true;
+                case android.view.MotionEvent.ACTION_MOVE: {
+                    int margin = 8 * density;
+                    int left = panel.getLeft(); // 布局位置（不含平移）
+                    float tx = down[1] + (ev.getRawX() - down[0]);
+                    float minTx = margin - left;
+                    float maxTx = (screenWidthPx - down[2] - margin) - left;
+                    panel.setTranslationX(Math.max(minTx, Math.min(tx, maxTx)));
+                    return true;
+                }
+                case android.view.MotionEvent.ACTION_UP:
+                case android.view.MotionEvent.ACTION_CANCEL: {
+                    int margin = 8 * density;
+                    float center = panel.getLeft() + panel.getTranslationX() + down[2] / 2f;
+                    FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) panel.getLayoutParams();
+                    if (center < screenWidthPx / 2f) {
+                        lp.gravity = Gravity.LEFT | Gravity.CENTER_VERTICAL;
+                        lp.leftMargin = margin;
+                        lp.rightMargin = 0;
+                    } else {
+                        lp.gravity = Gravity.RIGHT | Gravity.CENTER_VERTICAL;
+                        lp.rightMargin = margin;
+                        lp.leftMargin = 0;
+                    }
+                    panel.setTranslationX(0);
+                    panel.setLayoutParams(lp);
+                    return true;
+                }
+            }
+            return false;
+        });
     }
 
     private View createTopBar() {
@@ -365,7 +572,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         bar.setPadding(8, 0, 8, 0);
         bar.setGravity(Gravity.CENTER_VERTICAL);
 
-        // 左侧三个按钮：撤销、关闭音乐、关闭音效
+        // 撤销按钮；音乐/音效与打开/保存已移到左侧浮动按钮
         undoBtn = makeTopBtn("撤销");
         undoBtn.setOnClickListener(v -> {
             if (mapData==null||!history.canUndo()) return;
@@ -373,26 +580,8 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         });
         bar.addView(undoBtn); bar.addView(spacer(4));
 
-        Button musicBtn = makeTopBtn(musicEnabled ? "关闭音乐" : "开启音乐");
-        musicBtn.setOnClickListener(v -> {
-            musicEnabled = !musicEnabled;
-            musicBtn.setText(musicEnabled ? "关闭音乐" : "开启音乐");
-            getSharedPreferences("wc4_editor_prefs", MODE_PRIVATE).edit().putBoolean("music_enabled", musicEnabled).apply();
-            if (musicEnabled && bgMusicPlayer != null) bgMusicPlayer.start();
-            else if (bgMusicPlayer != null) bgMusicPlayer.pause();
-        });
-        bar.addView(musicBtn); bar.addView(spacer(4));
-
-        Button sfxBtn = makeTopBtn(sfxEnabled ? "关闭音效" : "开启音效");
-        sfxBtn.setOnClickListener(v -> {
-            sfxEnabled = !sfxEnabled;
-            sfxBtn.setText(sfxEnabled ? "关闭音效" : "开启音效");
-            getSharedPreferences("wc4_editor_prefs", MODE_PRIVATE).edit().putBoolean("sfx_enabled", sfxEnabled).apply();
-        });
-        bar.addView(sfxBtn);
-
         // 工具栏可横向滑动，手机窄屏时所有操作均可访问。
-        String[] labels = {"新建BTL","打开","保存","预览","底图","图填","遮罩"};
+        String[] labels = {"新建BTL","扩展","随机","截取","预览","底图","图填","遮罩"};
         for (int i = 0; i < labels.length; i++) {
             final int a = i;
             Button btn = makeTopBtn(labels[i]);
@@ -408,12 +597,16 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
     private Button makeTopBtn(String text) {
         Button btn = new Button(this);
         btn.setText(text);
-        btn.setTextSize(11);
+        btn.setTextSize(12);
         btn.setTextColor(Color.WHITE);
-        btn.setLayoutParams(new LinearLayout.LayoutParams(-2, 34));
-        btn.setPadding(8, 0, 8, 0);
+        int density = (int) getResources().getDisplayMetrics().density;
+        btn.setLayoutParams(new LinearLayout.LayoutParams(-2, 36 * density));
+        btn.setPadding(10 * density, 0, 10 * density, 0);
         btn.setGravity(Gravity.CENTER);
-        btn.setBackgroundColor(Color.parseColor("#2a2a5e"));
+        android.graphics.drawable.GradientDrawable gd = new android.graphics.drawable.GradientDrawable();
+        gd.setColor(Color.parseColor("#2f3d75"));
+        gd.setCornerRadius(8 * density);
+        btn.setBackground(gd);
         return btn;
     }
 
@@ -426,13 +619,24 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
     private void topAction(int a) {
         switch (a) {
             case 0: newBtlMap(); break;
-            case 1: openFile(); break;
-            case 2: saveFile(); break;
-            case 3: rightPanel.setVisibility(rightPanel.getVisibility() == View.GONE ? View.VISIBLE : View.GONE); break;
-            case 4: importOverlay(); break;
-            case 5: importGuideImage(); break;
-            case 6: toggleOverlay(); break;
+            case 1: showExpandDirectionDialog(); break;
+            case 2: randomizeTerrainDialog(); break;
+            case 3: startCropSelect(); break;
+            case 4: rightPanel.setVisibility(rightPanel.getVisibility() == View.GONE ? View.VISIBLE : View.GONE); break;
+            case 5: importOverlay(); break;
+            case 6: importGuideImage(); break;
+            case 7: toggleOverlay(); break;
         }
+    }
+
+    private void startCropSelect() {
+        if (mapData == null) {
+            Toast.makeText(this, "请先加载地图", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        cropSelecting = true;
+        cropAx = cropAy = -1;
+        Toast.makeText(this, "截取：请点击起点格子（第一个角）", Toast.LENGTH_LONG).show();
     }
 
     private void expandMap() {
@@ -461,7 +665,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
             hexMapView.setMapData(mapData);
             hexMapView.refresh();
             updateInfo();
-            currentFileName = "扩展地图_" + nw + "x" + nh;
+            currentFileName = "扩展地图_" + nw + "x" + nh + ".btl";
             Toast.makeText(this, "已扩展为 " + nw + "x" + nh, Toast.LENGTH_SHORT).show();
         });
         b.setNegativeButton("取消", null);
@@ -469,129 +673,9 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
     }
 
     private void expandMapData(MapData mapData, int newW, int newH) {
-        int oldW = mapData.width, oldH = mapData.height;
-        java.util.List<TerrainTile> oldTiles = new java.util.ArrayList<>(mapData.tiles);
-        java.util.List<Integer> oldBuildings = new java.util.ArrayList<>(mapData.buildingIds);
-
-        mapData.width = newW;
-        mapData.height = newH;
-        int newTotal = newW * newH;
-        mapData.tiles = new java.util.ArrayList<>(newTotal);
-        mapData.buildingIds = new java.util.ArrayList<>(newTotal);
-
-        for (int y = 0; y < newH; y++) {
-            for (int x = 0; x < newW; x++) {
-                int newIdx = y * newW + x;
-                if (x < oldW && y < oldH) {
-                    int oldIdx = y * oldW + x;
-                    mapData.tiles.add(oldTiles.get(oldIdx));
-                    mapData.buildingIds.add(oldBuildings.get(oldIdx));
-                } else {
-                    // 新区域填海洋
-                    TerrainTile sea = new TerrainTile();
-                    sea.bmTerrain1Group = 1;
-                    sea.bmTerrain1Id = 1;
-                    mapData.tiles.add(sea);
-                    mapData.buildingIds.add(0);
-                }
-            }
-        }
-
-        // 修正 BTL 原始数据——保证 saveAsBTL 和 loadBTL 能正确解析
-        if (mapData.btlOriginalData != null) {
-            try {
-                byte[] oldBtl = mapData.btlOriginalData;
-                FileParser.BtlHeaderInfo header = FileParser.parseBTLHeader(oldBtl);
-                int oldTotalTiles = oldW * oldH;
-                int newTotalTiles = newW * newH;
-
-                int terrainStart = header.terrainStart;
-
-                // 旧文件各段偏移
-                int oldAdminStart = terrainStart + oldTotalTiles * 16;
-                int oldOwnershipStart = oldAdminStart + oldTotalTiles * 2;
-                int oldBuildingStart = oldOwnershipStart + oldTotalTiles * 1;
-
-                // 新文件各段偏移（按 loadBTL 的计算规则）
-                int newAdminStart = terrainStart + newTotalTiles * 16;
-                int newOwnershipStart = newAdminStart + newTotalTiles * 2;
-                int newBuildingStart = newOwnershipStart + newTotalTiles * 1;
-
-                // building 之后剩余数据原样保留
-                int afterBuildingSize = oldBtl.length - oldBuildingStart;
-                if (afterBuildingSize < 0) afterBuildingSize = 0;
-
-                int newFileSize = newBuildingStart + afterBuildingSize;
-                byte[] newBtl = new byte[newFileSize];
-
-                // 1. 复制头部（到 terrainStart 之前，含军团数据）
-                System.arraycopy(oldBtl, 0, newBtl, 0, terrainStart);
-
-                // 2. 写入新地块数据
-                for (int y = 0; y < newH; y++) {
-                    for (int x = 0; x < newW; x++) {
-                        int idx = y * newW + x;
-                        mapData.tiles.get(idx).toBytes(newBtl, terrainStart + idx * 16);
-                    }
-                }
-
-                // 3. 管理数据（2字节/格）——逐格按新坐标重排
-                for (int y = 0; y < newH; y++) {
-                    for (int x = 0; x < newW; x++) {
-                        int newAddr = newAdminStart + (y * newW + x) * 2;
-                        if (x < oldW && y < oldH) {
-                            int oldAddr = oldAdminStart + (y * oldW + x) * 2;
-                            newBtl[newAddr] = oldBtl[oldAddr];
-                            newBtl[newAddr + 1] = oldBtl[oldAddr + 1];
-                        } else {
-                            newBtl[newAddr] = 0;
-                            newBtl[newAddr + 1] = 0;
-                        }
-                    }
-                }
-
-                // 4. 所有权数据（1字节/格）
-                for (int y = 0; y < newH; y++) {
-                    for (int x = 0; x < newW; x++) {
-                        int newAddr = newOwnershipStart + y * newW + x;
-                        if (x < oldW && y < oldH) {
-                            int oldAddr = oldOwnershipStart + y * oldW + x;
-                            newBtl[newAddr] = oldBtl[oldAddr];
-                        } else {
-                            newBtl[newAddr] = (byte)0xFF;
-                        }
-                    }
-                }
-
-                // 5. 建筑数据——不变，建筑坐标 (bx, by) 用 % oldW 和 / oldW 解析
-                //    宽变了但建筑在旧格子中坐标值不变，因为坐标是相对于原文件的
-                //    但存档用 loadBTL 会按新宽重新解析坐标，所以要修正建筑坐标
-                if (header.buildingCount > 0 && afterBuildingSize > 0) {
-                    System.arraycopy(oldBtl, oldBuildingStart, newBtl, newBuildingStart, afterBuildingSize);
-                    // 修正每条建筑坐标：新坐标 = by * newW + bx
-                    for (int i = 0; i < header.buildingCount; i++) {
-                        int addr = newBuildingStart + i * 32;
-                        if (addr + 4 > newFileSize) break;
-                        int oldCoord = ByteBuffer.wrap(newBtl).order(ByteOrder.LITTLE_ENDIAN).getShort(addr) & 0xFFFF;
-                        int bx = oldCoord % oldW;
-                        int by = oldCoord / oldW;
-                        int newCoord = by * newW + bx;
-                        newBtl[addr] = (byte)(newCoord & 0xFF);
-                        newBtl[addr + 1] = (byte)((newCoord >> 8) & 0xFF);
-                    }
-                }
-
-                // 6. 修正头部宽高
-                ByteBuffer bb = ByteBuffer.wrap(newBtl).order(ByteOrder.LITTLE_ENDIAN);
-                bb.putInt(0x10, newW);
-                bb.putInt(0x14, newH);
-
-                mapData.btlOriginalData = newBtl;
-            } catch (Exception e) {
-                android.util.Log.e("EXPAND", "BTL修正失败", e);
-                Toast.makeText(this, "BTL数据修正失败: " + e.getMessage(), Toast.LENGTH_LONG).show();
-            }
-        }
+        // 向右下方扩展：旧内容左上对齐，新格填海洋
+        final int oldW = mapData.width;
+        expandMapGeneric(mapData, newW, newH, idx -> (idx / oldW) * newW + (idx % oldW), makeFillTile(true));
     }
 
     // ===== 向上扩展（顶部插入n行，原内容向下平移） =====
@@ -630,7 +714,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
                 hexMapView.setMapData(mapData);
                 hexMapView.refresh();
                 updateInfo();
-                currentFileName = "上扩展+" + n + "行_" + mapData.width + "x" + mapData.height;
+                currentFileName = "上扩展+" + n + "行_" + mapData.width + "x" + mapData.height + ".btl";
                 Toast.makeText(this, "已向上扩展 " + n + " 行", Toast.LENGTH_SHORT).show();
             } catch (Exception ex) {
                 Toast.makeText(this, "扩展出错: " + ex.getMessage(), Toast.LENGTH_LONG).show();
@@ -641,47 +725,150 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
     }
 
     private void expandMapUp(MapData mapData, int n) {
-        int w = mapData.width, oldH = mapData.height, newH = oldH + n;
-        int m = n * w; // 新增格子数
+        // 向上扩展：顶部插入 n 行，原内容整体下移 n 行
+        final int w = mapData.width;
+        expandMapGeneric(mapData, w, mapData.height + n, idx -> idx + n * w, makeFillTile(true));
+    }
 
-        // 1. 内存 tiles 和 buildingIds 全部向下平移 n 行
+    // ===== 顶部“扩展”按钮：四个方向 =====
+    private void showExpandDirectionDialog() {
+        if (mapData == null) { Toast.makeText(this, "请先加载地图", Toast.LENGTH_SHORT).show(); return; }
+        AlertDialog.Builder b = new AlertDialog.Builder(this);
+        b.setTitle("扩展地图（当前 " + mapData.width + "x" + mapData.height + "）");
+        LinearLayout l = new LinearLayout(this);
+        l.setOrientation(LinearLayout.VERTICAL);
+        l.setPadding(40, 20, 40, 20);
+
+        // 方向单选框
+        final RadioGroup dirGroup = new RadioGroup(this);
+        final String[] dirs = {"向上扩展", "向下扩展", "向左扩展", "向右扩展"};
+        final RadioButton[] dirBtns = new RadioButton[4];
+        for (int i = 0; i < 4; i++) {
+            dirBtns[i] = new RadioButton(this);
+            dirBtns[i].setText(dirs[i]);
+            dirBtns[i].setId(i + 1); // 1=向上 2=向下 3=向左 4=向右
+            if (i == 0) dirBtns[i].setChecked(true);
+            dirGroup.addView(dirBtns[i]);
+        }
+        l.addView(dirGroup);
+
+        final EditText et = new EditText(this);
+        et.setHint("扩展行数（1~50）");
+        et.setInputType(InputType.TYPE_CLASS_NUMBER);
+        et.setText("5");
+        l.addView(et);
+        dirGroup.setOnCheckedChangeListener((g, checkedId) ->
+                et.setHint(checkedId <= 2 ? "扩展行数（1~50）" : "扩展列数（1~50）"));
+
+        // 填充地形下拉选择
+        final Spinner fillSpinner = new Spinner(this);
+        ArrayAdapter<String> fillAdapter = new ArrayAdapter<>(this,
+                android.R.layout.simple_spinner_item,
+                new String[]{"填充海洋", "填充陆地（平原）"});
+        fillAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        fillSpinner.setAdapter(fillAdapter);
+        l.addView(fillSpinner);
+        b.setView(l);
+        b.setPositiveButton("扩展", (d, w) -> {
+            try {
+                int checkedId = dirGroup.getCheckedRadioButtonId();
+                int dir = 0;
+                for (int i = 0; i < 4; i++) if (dirBtns[i].getId() == checkedId) dir = i;
+                int n = Integer.parseInt(et.getText().toString());
+                if (n <= 0 || n > 50) {
+                    Toast.makeText(this, "行/列数范围为 1~50", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                int oldW = mapData.width, oldH = mapData.height;
+                boolean rows = dir <= 1;
+                int newW = oldW + (rows ? 0 : n);
+                int newH = oldH + (rows ? n : 0);
+                if (newW > 200 || newH > 200) {
+                    Toast.makeText(this, "地图最大 200x200", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                history.save(mapData);
+                java.util.function.IntUnaryOperator remap;
+                switch (dir) {
+                    case 0: remap = idx -> idx + n * oldW; break;                                   // 向上
+                    case 1: remap = idx -> idx; break;                                              // 向下：索引不变
+                    case 2: remap = idx -> (idx / oldW) * newW + n + (idx % oldW); break;           // 向左
+                    default: remap = idx -> (idx / oldW) * newW + (idx % oldW); break;              // 向右
+                }
+                TerrainTile fill = fillSpinner.getSelectedItemPosition() == 0
+                        ? makeFillTile(true) : makeFillTile(false);
+                expandMapGeneric(mapData, newW, newH, remap, fill);
+                hexMapView.setMapData(mapData);
+                hexMapView.refresh();
+                updateInfo();
+                final String[] names = {"向上", "向下", "向左", "向右"};
+                currentFileName = names[dir] + "扩展" + n + (rows ? "行" : "列") + "_"
+                        + newW + "x" + newH + ".btl";
+                Toast.makeText(this, "已" + names[dir] + "扩展 " + n + (rows ? " 行" : " 列"),
+                        Toast.LENGTH_LONG).show();
+            } catch (Exception ex) {
+                Toast.makeText(this, "扩展出错: " + ex.getMessage(), Toast.LENGTH_LONG).show();
+            }
+        });
+        b.setNegativeButton("取消", null);
+        b.show();
+    }
+
+    /**
+     * 通用地图扩展引擎：把地图改为 newW×newH，remap 将旧格索引映射到新格索引。
+     * 未被旧格占用的新格填海洋（省规划 0、归属 FF）；建筑及之后所有含地块索引的
+     * 业务段按同一 remap 重映射；头部宽高与 0x58 地块总数同步更新。
+     */
+    private void expandMapGeneric(MapData mapData, int newW, int newH,
+                                  java.util.function.IntUnaryOperator remap, TerrainTile fillTile) {
+        if (mapData.binOriginalData != null) {
+            Toast.makeText(this, "征服地图地形来自世界 BIN，不支持扩展", Toast.LENGTH_LONG).show();
+            return;
+        }
+        int oldW = mapData.width, oldH = mapData.height;
+        int oldTotal = oldW * oldH;
+        int newTotal = newW * newH;
+
+        // 旧格 -> 新格索引（四个方向的映射均为一一映射）
+        int[] oldIndexOfNew = new int[newTotal];
+        java.util.Arrays.fill(oldIndexOfNew, -1);
+        for (int i = 0; i < oldTotal; i++) {
+            int ni = remap.applyAsInt(i);
+            if (ni >= 0 && ni < newTotal) oldIndexOfNew[ni] = i;
+        }
+
+        // 1. 内存 tiles/buildingIds 按新布局重建，新格填海洋
         java.util.List<TerrainTile> oldTiles = new java.util.ArrayList<>(mapData.tiles);
         java.util.List<Integer> oldBuildings = new java.util.ArrayList<>(mapData.buildingIds);
-
+        mapData.width = newW;
         mapData.height = newH;
-        int newTotal = w * newH;
         mapData.tiles = new java.util.ArrayList<>(newTotal);
         mapData.buildingIds = new java.util.ArrayList<>(newTotal);
-
-        // 顶部 n 行填海洋
-        for (int i = 0; i < m; i++) {
-            TerrainTile sea = new TerrainTile();
-            sea.bmTerrain1Group = 1;
-            sea.bmTerrain1Id = 1;
-            mapData.tiles.add(sea);
-            mapData.buildingIds.add(0);
+        for (int i = 0; i < newTotal; i++) {
+            int oi = oldIndexOfNew[i];
+            if (oi >= 0) {
+                mapData.tiles.add(oldTiles.get(oi));
+                mapData.buildingIds.add(oldBuildings.get(oi));
+            } else {
+                mapData.tiles.add(cloneTerrain(fillTile));
+                mapData.buildingIds.add(0);
+            }
         }
-        // 原数据向下平移
-        mapData.tiles.addAll(oldTiles);
-        mapData.buildingIds.addAll(oldBuildings);
 
         // 2. 修正 BTL 原始数据
         if (mapData.btlOriginalData != null) {
             try {
                 byte[] oldBtl = mapData.btlOriginalData;
                 FileParser.BtlHeaderInfo header = FileParser.parseBTLHeader(oldBtl);
-                int oldTotalTiles = w * oldH;
-                int newTotalTiles = w * newH;
                 int terrainStart = header.terrainStart;
 
-                // 各段偏移
-                int oldAdminStart = terrainStart + oldTotalTiles * 16;
-                int oldOwnershipStart = oldAdminStart + oldTotalTiles * 2;
-                int oldBuildingStart = oldOwnershipStart + oldTotalTiles * 1;
+                int oldAdminStart = terrainStart + oldTotal * 16;
+                int oldOwnershipStart = oldAdminStart + oldTotal * 2;
+                int oldBuildingStart = oldOwnershipStart + oldTotal;
 
-                int newAdminStart = terrainStart + newTotalTiles * 16;
-                int newOwnershipStart = newAdminStart + newTotalTiles * 2;
-                int newBuildingStart = newOwnershipStart + newTotalTiles * 1;
+                int newAdminStart = terrainStart + newTotal * 16;
+                int newOwnershipStart = newAdminStart + newTotal * 2;
+                int newBuildingStart = newOwnershipStart + newTotal;
 
                 int afterBuildingSize = oldBtl.length - oldBuildingStart;
                 if (afterBuildingSize < 0) afterBuildingSize = 0;
@@ -689,182 +876,113 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
                 int newFileSize = newBuildingStart + afterBuildingSize;
                 byte[] newBtl = new byte[newFileSize];
 
-                // 复制头部
+                // 头部与军团段原样复制
                 System.arraycopy(oldBtl, 0, newBtl, 0, terrainStart);
 
-                // 写入新地形数据（顶部n行海洋，然后原有数据）
-                for (int i = 0; i < newTotalTiles; i++) {
+                // 地形（16字节/格）
+                for (int i = 0; i < newTotal; i++) {
                     mapData.tiles.get(i).toBytes(newBtl, terrainStart + i * 16);
                 }
 
-                // 管理数据（2字节/格）顶部n行为0，原有向下平移
-                for (int y = 0; y < newH; y++) {
-                    for (int x = 0; x < w; x++) {
-                        int newAddr = newAdminStart + (y * w + x) * 2;
-                        if (y >= n) {
-                            int oldAddr = oldAdminStart + ((y - n) * w + x) * 2;
-                            newBtl[newAddr] = oldBtl[oldAddr];
-                            newBtl[newAddr + 1] = oldBtl[oldAddr + 1];
-                        } else {
-                            newBtl[newAddr] = 0;
-                            newBtl[newAddr + 1] = 0;
-                        }
+                // 省规划（2字节/格）
+                for (int i = 0; i < newTotal; i++) {
+                    int addr = newAdminStart + i * 2;
+                    int oi = oldIndexOfNew[i];
+                    if (oi >= 0) {
+                        newBtl[addr] = oldBtl[oldAdminStart + oi * 2];
+                        newBtl[addr + 1] = oldBtl[oldAdminStart + oi * 2 + 1];
+                    } else {
+                        byte v = (byte) (fillTile.bmTerrain1Group == 1 ? 0 : 0xFF);
+                        newBtl[addr] = v;
+                        newBtl[addr + 1] = v;
                     }
                 }
 
-                // 所有权数据（1字节/格）
-                for (int y = 0; y < newH; y++) {
-                    for (int x = 0; x < w; x++) {
-                        int newAddr = newOwnershipStart + y * w + x;
-                        if (y >= n) {
-                            int oldAddr = oldOwnershipStart + (y - n) * w + x;
-                            newBtl[newAddr] = oldBtl[oldAddr];
-                        } else {
-                            newBtl[newAddr] = (byte)0xFF;
-                        }
-                    }
+                // 军团归属（1字节/格）
+                for (int i = 0; i < newTotal; i++) {
+                    int oi = oldIndexOfNew[i];
+                    newBtl[newOwnershipStart + i] = oi >= 0 ? oldBtl[oldOwnershipStart + oi] : (byte) 0xFF;
                 }
 
-                // 建筑数据：复制，然后把每个建筑的格子索引 +m
-                if (header.buildingCount > 0 && afterBuildingSize > 0) {
+                // 建筑及之后所有数据原样搬运
+                if (afterBuildingSize > 0) {
                     System.arraycopy(oldBtl, oldBuildingStart, newBtl, newBuildingStart, afterBuildingSize);
+                }
+
+                // 建筑坐标重映射
+                if (header.buildingCount > 0 && afterBuildingSize > 0) {
                     for (int i = 0; i < header.buildingCount; i++) {
                         int addr = newBuildingStart + i * 32;
                         if (addr + 4 > newFileSize) break;
                         int coord = ByteBuffer.wrap(newBtl).order(ByteOrder.LITTLE_ENDIAN).getShort(addr) & 0xFFFF;
-                        coord += m;
-                        newBtl[addr] = (byte)(coord & 0xFF);
-                        newBtl[addr + 1] = (byte)((coord >> 8) & 0xFF);
-                    }
-                }
-
-                // 向 army 段之后的所有数据段中的格子索引 +m
-                // 军团数组之后的各个段，每条记录都可能有格子索引
-                // 使用通用策略：遍历 building 之后的所有数据，按固定偏移查找格子索引
-                int dataAfterBuildings = afterBuildingSize;
-                int cursor = newBuildingStart;
-
-                // --- 军团/兵种 (300字节/条) ---
-                if (header.armyCount > 0 && cursor + header.armyCount * 300 <= newFileSize) {
-                    for (int i = 0; i < header.armyCount; i++) {
-                        int addr = cursor + i * 300;
-                        // 兵种坐标：每条的第8-9字节（格子索引）
-                        if (addr + 10 <= newFileSize) {
-                            int idx = ByteBuffer.wrap(newBtl).order(ByteOrder.LITTLE_ENDIAN).getShort(addr + 8) & 0xFFFF;
-                            if (idx > 0 && idx < oldTotalTiles) {
-                                idx += m;
-                                newBtl[addr + 8] = (byte)(idx & 0xFF);
-                                newBtl[addr + 9] = (byte)((idx >> 8) & 0xFF);
-                            }
-                        }
-                        // 第12-13字节也可能是坐标
-                        if (addr + 14 <= newFileSize) {
-                            int idx2 = ByteBuffer.wrap(newBtl).order(ByteOrder.LITTLE_ENDIAN).getShort(addr + 12) & 0xFFFF;
-                            if (idx2 > 0 && idx2 < oldTotalTiles) {
-                                idx2 += m;
-                                newBtl[addr + 12] = (byte)(idx2 & 0xFF);
-                                newBtl[addr + 13] = (byte)((idx2 >> 8) & 0xFF);
-                            }
+                        if (coord < oldTotal) {
+                            int nc = remap.applyAsInt(coord);
+                            newBtl[addr] = (byte) (nc & 0xFF);
+                            newBtl[addr + 1] = (byte) ((nc >>> 8) & 0xFF);
                         }
                     }
                 }
-                cursor += header.armyCount * 300;
 
-                // --- 陷阱/计划 ---
-                // 陷阱和计划在同一个段，每条 60 字节，无坐标索引，跳过
-                if (header.planCount > 0) cursor += header.planCount * 60;
+                // 建筑之后各业务段（兵种/方案/援军/空袭/陷阱）的地块索引重映射
+                FileParser.remapSectionTileIndexes(newBtl, newBuildingStart, header, remap);
 
-                // --- 天气 (52字节/条) --- 有格子索引
-                if (header.weatherCount > 0 && cursor + header.weatherCount * 52 <= newFileSize) {
-                    for (int i = 0; i < header.weatherCount; i++) {
-                        int addr = cursor + i * 52;
-                        if (addr + 6 <= newFileSize) {
-                            int idx = ByteBuffer.wrap(newBtl).order(ByteOrder.LITTLE_ENDIAN).getShort(addr + 4) & 0xFFFF;
-                            if (idx > 0 && idx < oldTotalTiles) {
-                                idx += m;
-                                newBtl[addr + 4] = (byte)(idx & 0xFF);
-                                newBtl[addr + 5] = (byte)((idx >> 8) & 0xFF);
-                            }
-                        }
-                    }
-                }
-                if (header.weatherCount > 0) cursor += header.weatherCount * 52;
-
-                // --- 事件 (40字节/条) --- 可能有格子索引在第2-3字节
-                if (header.eventCount > 0 && cursor + header.eventCount * 40 <= newFileSize) {
-                    for (int i = 0; i < header.eventCount; i++) {
-                        int addr = cursor + i * 40;
-                        if (addr + 4 <= newFileSize) {
-                            int idx = ByteBuffer.wrap(newBtl).order(ByteOrder.LITTLE_ENDIAN).getShort(addr + 2) & 0xFFFF;
-                            if (idx > 0 && idx < oldTotalTiles) {
-                                idx += m;
-                                newBtl[addr + 2] = (byte)(idx & 0xFF);
-                                newBtl[addr + 3] = (byte)((idx >> 8) & 0xFF);
-                            }
-                        }
-                    }
-                }
-                if (header.eventCount > 0) cursor += header.eventCount * 40;
-
-                // --- 援军 (128字节/条) --- 格子索引在第0-1字节
-                if (header.reinforceCount > 0 && cursor + header.reinforceCount * 128 <= newFileSize) {
-                    for (int i = 0; i < header.reinforceCount; i++) {
-                        int addr = cursor + i * 128;
-                        if (addr + 4 <= newFileSize) {
-                            int idx = ByteBuffer.wrap(newBtl).order(ByteOrder.LITTLE_ENDIAN).getShort(addr) & 0xFFFF;
-                            if (idx > 0 && idx < oldTotalTiles) {
-                                idx += m;
-                                newBtl[addr] = (byte)(idx & 0xFF);
-                                newBtl[addr + 1] = (byte)((idx >> 8) & 0xFF);
-                            }
-                        }
-                    }
-                }
-                if (header.reinforceCount > 0) cursor += header.reinforceCount * 128;
-
-                // --- 空袭 (48字节/条) ---
-                if (header.airstrikeCount > 0 && cursor + header.airstrikeCount * 48 <= newFileSize) {
-                    for (int i = 0; i < header.airstrikeCount; i++) {
-                        int addr = cursor + i * 48;
-                        if (addr + 4 <= newFileSize) {
-                            int idx = ByteBuffer.wrap(newBtl).order(ByteOrder.LITTLE_ENDIAN).getShort(addr) & 0xFFFF;
-                            if (idx > 0 && idx < oldTotalTiles) {
-                                idx += m;
-                                newBtl[addr] = (byte)(idx & 0xFF);
-                                newBtl[addr + 1] = (byte)((idx >> 8) & 0xFF);
-                            }
-                        }
-                    }
-                }
-                if (header.airstrikeCount > 0) cursor += header.airstrikeCount * 48;
-
-                // --- 布雷 (40字节/条) ---
-                if (header.mineCount > 0 && cursor + header.mineCount * 40 <= newFileSize) {
-                    for (int i = 0; i < header.mineCount; i++) {
-                        int addr = cursor + i * 40;
-                        if (addr + 4 <= newFileSize) {
-                            int idx = ByteBuffer.wrap(newBtl).order(ByteOrder.LITTLE_ENDIAN).getShort(addr) & 0xFFFF;
-                            if (idx > 0 && idx < oldTotalTiles) {
-                                idx += m;
-                                newBtl[addr] = (byte)(idx & 0xFF);
-                                newBtl[addr + 1] = (byte)((idx >> 8) & 0xFF);
-                            }
-                        }
-                    }
-                }
-                if (header.mineCount > 0) cursor += header.mineCount * 40;
-
-                // 更新头部宽高
+                // 头部宽高与地块总数
                 ByteBuffer bb = ByteBuffer.wrap(newBtl).order(ByteOrder.LITTLE_ENDIAN);
-                bb.putInt(0x10, w);
+                bb.putInt(0x10, newW);
                 bb.putInt(0x14, newH);
+                bb.putInt(0x58, newTotal);
 
                 mapData.btlOriginalData = newBtl;
             } catch (Exception e) {
-                android.util.Log.e("EXPAND_UP", "BTL修正失败", e);
+                android.util.Log.e("EXPAND_DIR", "BTL修正失败", e);
                 Toast.makeText(this, "BTL数据修正失败: " + e.getMessage(), Toast.LENGTH_LONG).show();
             }
         }
+    }
+
+    /** 生成填充地形：true=海洋，false=标准平原（与 BTL 模板中的平原地块一致）。 */
+    private static TerrainTile makeFillTile(boolean sea) {
+        return makeFillTileByGroup(sea ? 1 : 0);
+    }
+
+    /**
+     * 生成指定地形组的填充格。真实游戏文件中陆地和海洋都带有标准装饰层
+     * (3F FF / 3F FF)，缺失会导致游戏不渲染该格子（例如海洋“消失”）。
+     * 1=海洋(Id=0)，0=标准平原(Id=FF)，其余组 Id=0。
+     */
+    private static TerrainTile makeFillTileByGroup(int group) {
+        TerrainTile t = new TerrainTile();
+        t.bmTerrain1Group = group;
+        t.decoration1Group = 0x3F;
+        t.decoration1Id = 0xFF;
+        t.decoration2Group = 0x3F;
+        t.decoration2Id = 0xFF;
+        if (group == 0) {
+            t.bmTerrain1Id = 0xFF;
+        }
+        return t;
+    }
+
+    /** 复制一个 TerrainTile（避免新格子共用同一实例、一改全改）。 */
+    private static TerrainTile cloneTerrain(TerrainTile src) {
+        TerrainTile t = new TerrainTile();
+        t.bmTerrain1Group = src.bmTerrain1Group;
+        t.bmTerrain1Id = src.bmTerrain1Id;
+        t.bmTerrain1X = src.bmTerrain1X;
+        t.bmTerrain1Y = src.bmTerrain1Y;
+        t.decoration1Group = src.decoration1Group;
+        t.decoration1Id = src.decoration1Id;
+        t.decoration1X = src.decoration1X;
+        t.decoration1Y = src.decoration1Y;
+        t.decoration2Group = src.decoration2Group;
+        t.decoration2Id = src.decoration2Id;
+        t.decoration2X = src.decoration2X;
+        t.decoration2Y = src.decoration2Y;
+        t.floorGroup = src.floorGroup;
+        t.floorId = src.floorId;
+        t.floorX = src.floorX;
+        t.floorY = src.floorY;
+        return t;
     }
 
     private void importGuideImage() {
@@ -891,6 +1009,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
 
     private static final int REQUEST_OVERLAY = 300;
     private static final int REQUEST_GUIDE = 301;
+    private static final int REQUEST_CONQUEST_BIN = 302;
     private void importOverlay() {
         if (mapData == null) { Toast.makeText(this, "请先加载地图", Toast.LENGTH_SHORT).show(); return; }
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
@@ -928,53 +1047,14 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         mapInfo.setPadding(8, 0, 8, 6);
         panel.addView(mapInfo);
 
-        // 按钮行：多选 + 取消多选 + 魔笔
-        LinearLayout multiRow = new LinearLayout(this);
-        multiRow.setOrientation(LinearLayout.HORIZONTAL);
-        multiRow.setLayoutParams(new LinearLayout.LayoutParams(-1, 36));
-        multiRow.setPadding(4, 4, 4, 4);
-        
-        Button selectBtn = new Button(this);
-        selectBtn.setText("多选");
-        selectBtn.setTextSize(12);
-        selectBtn.setLayoutParams(new LinearLayout.LayoutParams(0, -1, 1));
-        selectBtn.setGravity(Gravity.CENTER);
-        selectBtn.setPadding(4, 0, 4, 0);
-        selectBtn.setBackgroundColor(Color.parseColor("#2a2a5e"));
-        selectBtn.setTextColor(Color.WHITE);
-        selectBtn.setOnClickListener(v -> {
-            if (mapData != null) {
-                mapData.multiSelectMode = !mapData.multiSelectMode;
-                if (mapData.multiSelectMode) {
-                    mapData.selectedBlocks.clear();
-                    selectBtn.setBackgroundColor(Color.parseColor("#22c55e"));
-                    Toast.makeText(this,"多选模式已开启，点击地块可多选",Toast.LENGTH_SHORT).show();
-                } else {
-                    mapData.selectedBlocks.clear();
-                    selectBtn.setBackgroundColor(Color.parseColor("#2a2a5e"));
-                    Toast.makeText(this,"多选模式已关闭",Toast.LENGTH_SHORT).show();
-                }
-                hexMapView.refresh();
-            } else {
-                Toast.makeText(this,"请先加载地图",Toast.LENGTH_SHORT).show();
-            }
-        });
-        
-        Button cancelBtn = new Button(this);
-        cancelBtn.setText("取消多选");
-        cancelBtn.setTextSize(12);
-        cancelBtn.setLayoutParams(new LinearLayout.LayoutParams(0, -1, 1));
-        cancelBtn.setGravity(Gravity.CENTER);
-        cancelBtn.setPadding(4, 0, 4, 0);
-        cancelBtn.setBackgroundColor(Color.parseColor("#2a2a5e"));
-        cancelBtn.setTextColor(Color.WHITE);
-        cancelBtn.setOnClickListener(v -> {
-            clearMultiSelection();
-            selectBtn.setBackgroundColor(Color.parseColor("#2a2a5e"));
-        });
-        
+        // 笔刷模式按钮
+        LinearLayout brushRow = new LinearLayout(this);
+        brushRow.setOrientation(LinearLayout.HORIZONTAL);
+        brushRow.setLayoutParams(new LinearLayout.LayoutParams(-1, 36));
+        brushRow.setPadding(4, 4, 4, 4);
+
         Button penBtn = new Button(this);
-        penBtn.setText("魔笔");
+        penBtn.setText("笔刷");
         penBtn.setTextSize(12);
         penBtn.setLayoutParams(new LinearLayout.LayoutParams(0, -1, 1));
         penBtn.setGravity(Gravity.CENTER);
@@ -984,20 +1064,13 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         penBtn.setOnClickListener(v -> {
             if (mapData == null) { Toast.makeText(this,"请先加载地图",Toast.LENGTH_SHORT).show(); return; }
             mapData.brushMode = !mapData.brushMode;
-            penBtn.setText(mapData.brushMode ? "魔笔(开)" : "魔笔");
+            penBtn.setText(mapData.brushMode ? "笔刷(开)" : "笔刷");
             penBtn.setBackgroundColor(Color.parseColor(mapData.brushMode ? "#22c55e" : "#2a2a5e"));
             hexMapView.refresh();
-            Toast.makeText(this, mapData.brushMode ? "魔笔已开启：先选地形，滑动涂抹即可修改" : "魔笔已关闭", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, mapData.brushMode ? "笔刷已开启：先选地形，滑动涂抹即可修改" : "笔刷已关闭", Toast.LENGTH_SHORT).show();
         });
-        
-        multiRow.addView(selectBtn);
-        View sp1 = new View(this); sp1.setLayoutParams(new LinearLayout.LayoutParams(4, 1));
-        multiRow.addView(sp1);
-        multiRow.addView(cancelBtn);
-        View sp2 = new View(this); sp2.setLayoutParams(new LinearLayout.LayoutParams(4, 1));
-        multiRow.addView(sp2);
-        multiRow.addView(penBtn);
-        panel.addView(multiRow);
+        brushRow.addView(penBtn);
+        panel.addView(brushRow);
 
         // 笔刷范围控制行
         LinearLayout brushRangeRow = new LinearLayout(this);
@@ -1108,8 +1181,10 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
                 if (hexMapView.getSelectedX() >= 0) {
                     history.save(mapData);
                     int x = hexMapView.getSelectedX(), y = hexMapView.getSelectedY();
-                    mapData.getTile(x, y).bmTerrain1Group = g;
-                    mapData.getTile(x, y).bmTerrain1Id = (g == 0) ? 255 : 0;
+                    byte[] pat = mapData.getTerrainPattern(g);
+                    if (pat != null) mapData.getTile(x, y).parseFromBytes(pat, 0);
+                    else mapData.getTile(x, y).setTerrain(g);
+                    mapData.editedCells.add(y * mapData.width + x);
                     hexMapView.refresh(); updateInfo();
                 } else {
                     Toast.makeText(this, "请先点击地图上的格子", Toast.LENGTH_SHORT).show();
@@ -1206,30 +1281,20 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         buildingTabBtn.setTextColor(t ? 0xFF374151 : Color.WHITE);
     }
 
-    private View createBottomBar() {
-        LinearLayout bar = new LinearLayout(this);
-        bar.setOrientation(LinearLayout.HORIZONTAL);
-        bar.setLayoutParams(new LinearLayout.LayoutParams(-1, 52));
-        bar.setBackgroundColor(Color.parseColor("#0f3460"));
-        bar.setGravity(Gravity.CENTER);
-        bar.setPadding(8, 4, 8, 4);
-
-        Button clearBtn = makeBtn("清建筑");
-        clearBtn.setOnClickListener(v -> { if (mapData==null||hexMapView.getSelectedX()<0) return; history.save(mapData); mapData.setBuildingId(hexMapView.getSelectedX(),hexMapView.getSelectedY(),0); hexMapView.refresh(); updateInfo(); });
-        bar.addView(clearBtn);
-
-        Button expandUpBtn = makeBtn("上加行");
-        expandUpBtn.setOnClickListener(v -> showExpandUpDialog());
-        bar.addView(expandUpBtn);
-
-        return bar;
-    }
-
     private Button makeBtn(String t) {
         Button btn = new Button(this);
         btn.setText(t); btn.setTextSize(11); btn.setPadding(8,0,8,0);
         btn.setLayoutParams(new LinearLayout.LayoutParams(0,-1,1));
         btn.setBackgroundColor(Color.parseColor("#2a5a8a")); btn.setTextColor(Color.WHITE); btn.setGravity(Gravity.CENTER);
+        return btn;
+    }
+
+    /** 左侧浮动按钮：固定高度、自适应宽度、指定底色（配合纵向堆叠使用）。 */
+    private Button makeFloatBtn(String t, int bgColor) {
+        Button btn = makeBtn(t);
+        int h = (int) (40 * getResources().getDisplayMetrics().density);
+        btn.setLayoutParams(new LinearLayout.LayoutParams(-1, h));
+        btn.setBackgroundColor(bgColor);
         return btn;
     }
 
@@ -1263,6 +1328,38 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
 
     @Override public void onTileSelected(int x, int y, TerrainTile tile) {
         playSelectSfx();
+        if (cropSelecting) {
+            if (cropAx < 0) {
+                cropAx = x;
+                cropAy = y;
+                Toast.makeText(this, "起点 (" + x + "," + y + ")，请点击终点格子", Toast.LENGTH_LONG).show();
+                return;
+            }
+            final int ax = cropAx, ay = cropAy, bx = x, by = y;
+            cropSelecting = false;
+            int x1 = Math.min(ax, bx), y1 = Math.min(ay, by);
+            int x2 = Math.max(ax, bx), y2 = Math.max(ay, by);
+            AlertDialog.Builder b = new AlertDialog.Builder(this);
+            b.setTitle("截取地图");
+            b.setMessage("仅保留 (" + x1 + "," + y1 + ") 到 (" + x2 + "," + y2 + ") 区域（"
+                    + (x2 - x1 + 1) + "x" + (y2 - y1 + 1) + "），其余删除？");
+            b.setPositiveButton("截取", (d, w) -> {
+                try {
+                    FileParser.cropMap(mapData, ax, ay, bx, by);
+                    hexMapView.setMapData(mapData);
+                    hexMapView.refresh();
+                    updateInfo();
+                    currentFileName = "截取_" + (x2 - x1 + 1) + "x" + (y2 - y1 + 1) + ".btl";
+                    Toast.makeText(this, "已截取为 " + (x2 - x1 + 1) + "x" + (y2 - y1 + 1),
+                            Toast.LENGTH_LONG).show();
+                } catch (Exception e) {
+                    Toast.makeText(this, "截取失败: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                }
+            });
+            b.setNegativeButton("取消", null);
+            b.show();
+            return;
+        }
         updateInfo();
     }
 
@@ -1299,6 +1396,27 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         EditText hi = new EditText(this);
         hi.setHint("高度（3–200）"); hi.setInputType(InputType.TYPE_CLASS_NUMBER); hi.setText("15");
         l.addView(wi); l.addView(hi);
+
+        // 整图地形单选框（与右侧面板地形列表一致）
+        final int[] gids = {0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,18,20,21,22,26,30,31};
+        final String[] tns = {"空地（平原）","海洋","沙漠","矮雪山","中雪山","高雪山",
+                "矮土山","中土山","高土山","矮绿山","中绿山","高绿山",
+                "矮沙山","中沙山","高沙山","仙人掌","阔叶林","积雪阔叶林",
+                "针叶林","积雪针叶林","热带森林","农田","坑","雪地"};
+        final RadioGroup terrainChoice = new RadioGroup(this);
+        final RadioButton[] terrainBtns = new RadioButton[gids.length];
+        for (int i = 0; i < gids.length; i++) {
+            terrainBtns[i] = new RadioButton(this);
+            terrainBtns[i].setText(tns[i]);
+            terrainBtns[i].setId(i + 1);
+            if (i == 0) terrainBtns[i].setChecked(true);
+            terrainChoice.addView(terrainBtns[i]);
+        }
+        ScrollView terrainScrollBox = new ScrollView(this);
+        int maxH = (int) (300 * getResources().getDisplayMetrics().density);
+        terrainScrollBox.setLayoutParams(new LinearLayout.LayoutParams(-1, maxH));
+        terrainScrollBox.addView(terrainChoice);
+        l.addView(terrainScrollBox);
         b.setView(l);
         b.setPositiveButton("创建", (d, w) -> {
             try {
@@ -1313,13 +1431,22 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
                 byte[] template = readAssetBytes("templates/stage10103.btl");
                 mapData = FileParser.createEmptyBtlFromTemplate(template,
                     "新战役_" + wv + "x" + hv + ".btl", wv, hv);
+                int checkedId = terrainChoice.getCheckedRadioButtonId();
+                int sel = 0;
+                for (int i = 0; i < terrainBtns.length; i++) {
+                    if (terrainBtns[i].getId() == checkedId) sel = i;
+                }
+                TerrainTile fill = makeFillTileByGroup(gids[sel]);
+                for (int i = 0; i < mapData.tiles.size(); i++) {
+                    mapData.tiles.set(i, cloneTerrain(fill));
+                }
                 currentFileName = "新战役_" + wv + "x" + hv + ".btl";
                 history.clear();
                 mapData.historyRef = history;
                 hexMapView.setMapData(mapData);
                 updateInfo();
                 blockIdText.setText("未选中");
-                selectedInfo.setText("已创建空白平原战役；编辑后直接保存为 .btl");
+                selectedInfo.setText("已创建空白" + tns[sel] + "战役；编辑后直接保存为 .btl");
             } catch (Exception e) {
                 Toast.makeText(this, "新建失败: " + e.getMessage(), Toast.LENGTH_LONG).show();
             }
@@ -1521,6 +1648,14 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
             l.addView(row);
         }
 
+        // 海洋开关（默认关闭，避免破坏陆海边界）
+        final CheckBox seaCb = new CheckBox(this);
+        seaCb.setText("同时随机海洋（默认关闭）");
+        seaCb.setChecked(false);
+        seaCb.setTextSize(11);
+        seaCb.setTextColor(0xFF374151);
+        l.addView(seaCb);
+
         sv.addView(l);
         b.setView(sv);
 
@@ -1541,7 +1676,8 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
             }
 
             int seed = (int)(System.currentTimeMillis() & 0x7FFFFFFF);
-            RandomMapGenerator.randomizeTerrain(mapData.tiles, probability[0], allowedIds, seed, buildingIds);
+            RandomMapGenerator.randomizeTerrain(mapData.tiles, probability[0], allowedIds, seed,
+                    buildingIds, seaCb.isChecked(), mapData.terrainPatternList);
             hexMapView.refresh();
             updateInfo();
             int changedCount = (int)(probability[0] * mapData.tiles.size());
@@ -1569,7 +1705,20 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
             mapData=FileParser.loadFile(d,f.getName());currentFileName=f.getName();history.clear();if(mapData!=null)mapData.historyRef=history;
             hexMapView.setMapData(mapData);updateInfo();updateBtnState();
             blockIdText.setText("未选中");selectedInfo.setText("已加载: "+f.getName());
+            maybeLoadConquestBin();
         }catch(Exception e){Toast.makeText(this,"加载失败: "+e.getMessage(),Toast.LENGTH_LONG).show();}
+    }
+
+    /** 加载的 BTL 若为征服地图（地图序号!=0，地形在 world BIN 中），提示选择 BIN。 */
+    private void maybeLoadConquestBin() {
+        if (mapData == null || mapData.btlOriginalData == null) return;
+        FileParser.BtlHeaderInfo hi = FileParser.parseBTLHeader(mapData.btlOriginalData);
+        if (hi.independentTerrain) return;
+        Toast.makeText(this, "征服地图：请选择对应的世界地形 BIN 文件", Toast.LENGTH_LONG).show();
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("*/*");
+        startActivityForResult(i, REQUEST_CONQUEST_BIN);
     }
 
     private void saveFile() {
@@ -1584,11 +1733,11 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         // 弹窗让用户选择保存方式
         AlertDialog.Builder b = new AlertDialog.Builder(this);
         b.setTitle("选择保存位置");
-        b.setItems(new String[]{"默认位置（地图编辑器/）", "自定义路径..."}, (d, w) -> {
+        b.setItems(new String[]{"默认位置（地图编辑器/）", "自定义路径...", "另存为 BTL（BIN 转 BTL）"}, (d, w) -> {
             if (w == 0) {
                 File dir = new File(Environment.getExternalStorageDirectory(), "地图编辑器");
                 doSave(dir.getAbsolutePath());
-            } else {
+            } else if (w == 1) {
                 // 用系统文件选择器选目录
                 if (Build.VERSION.SDK_INT >= 21) {
                     Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
@@ -1597,26 +1746,88 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
                     // 低版本手动输入路径
                     showSavePathDialog();
                 }
+            } else {
+                // 另存为 BTL：把 BIN/内存地图转为标准 BTL 保存
+                saveAsBtl();
             }
         });
         b.setNegativeButton("取消", null);
         b.show();
     }
 
+    private void saveAsBtl() {
+        if (mapData == null) return;
+        try {
+            ensureBtlData();
+            currentFileName = stripBtlExt(currentFileName) + ".btl";
+            File dir = new File(Environment.getExternalStorageDirectory(), "地图编辑器");
+            doSave(dir.getAbsolutePath());
+        } catch (Exception e) {
+            android.util.Log.e("SAVE_BTL", "转BTL失败", e);
+            Toast.makeText(this, "转BTL失败: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    /**
+     * 若当前地图不是 BTL 数据（BIN 加载或内存新建），用已验证的战役模板重建为完整 BTL，
+     * 保留地形与建筑；BTL 地图直接跳过。
+     */
+    private void ensureBtlData() throws IOException {
+        if (mapData.btlOriginalData != null) return;
+        byte[] template = readAssetBytes("templates/stage10103.btl");
+        MapData conv = FileParser.createEmptyBtlFromTemplate(template,
+                stripBtlExt(currentFileName) + ".btl", mapData.width, mapData.height);
+        for (int i = 0; i < mapData.getTotalTiles(); i++) {
+            conv.tiles.set(i, mapData.tiles.get(i));
+            conv.buildingIds.set(i, mapData.buildingIds.get(i));
+        }
+        conv.historyRef = mapData.historyRef;
+        mapData = conv;
+        hexMapView.setMapData(mapData);
+        hexMapView.refresh();
+        updateInfo();
+        Toast.makeText(this, "已转换为 BTL 格式", Toast.LENGTH_SHORT).show();
+    }
+
+    private String stripBtlExt(String name) {
+        String n = name.toLowerCase();
+        if (n.endsWith(".btl") || n.endsWith(".bin")) {
+            return name.substring(0, name.length() - 4);
+        }
+        return name;
+    }
+
     private void doSave(String dirPath) {
         try{
-            boolean isBTL = currentFileName.toLowerCase().endsWith(".btl");
-            byte[] data = isBTL ? FileParser.saveAsBTL(mapData) : FileParser.saveAsBIN(mapData);
             String fileName = currentFileName;
             if (!fileName.toLowerCase().endsWith(".btl") && !fileName.toLowerCase().endsWith(".bin")) {
                 fileName = fileName + ".btl";
             }
+            // 无扩展名时默认保存为标准 BTL（修复扩展地图后误存成 BIN 的问题）
+            boolean isBTL = fileName.toLowerCase().endsWith(".btl");
+            // 保存为 BTL 但数据不是 BTL（如 BIN 文件起了 .btl 后缀）：先转换为标准 BTL
+            if (isBTL && mapData.btlOriginalData == null) {
+                ensureBtlData();
+            }
+            byte[] data = isBTL ? FileParser.saveAsBTL(mapData) : FileParser.saveAsBIN(mapData);
             File dir = new File(dirPath);
             if (!dir.exists()) dir.mkdirs();
             File outFile = new File(dir, fileName);
             FileOutputStream fos = new FileOutputStream(outFile);
             fos.write(data);
             fos.close();
+            // 征服地图：地形在世界 BIN 中，一并保存（保留原文件名与省规划段）
+            if (mapData.binOriginalData != null && mapData.btlOriginalData != null) {
+                byte[] binData = FileParser.saveAsBIN(mapData);
+                String binName = (mapData.binFileName != null && !mapData.binFileName.isEmpty())
+                        ? mapData.binFileName : "world.bin";
+                File binOut = new File(dir, binName);
+                FileOutputStream bos = new FileOutputStream(binOut);
+                bos.write(binData);
+                bos.close();
+                Toast.makeText(this, "✅ 已保存 BTL 与地形 " + binOut.getName() + " 到: "
+                        + dir.getAbsolutePath(), Toast.LENGTH_LONG).show();
+            }
             Toast.makeText(this,"✅ 已保存到: " + outFile.getAbsolutePath(),Toast.LENGTH_LONG).show();
         }catch(Exception e){
             android.util.Log.e("SAVE","error",e);
@@ -1664,7 +1875,28 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
                 mapData=FileParser.loadFile(buf,name);currentFileName=name;history.clear();if(mapData!=null)mapData.historyRef=history;
                 hexMapView.setMapData(mapData);updateInfo();updateBtnState();
                 blockIdText.setText("未选中");selectedInfo.setText("已加载: "+name);
+                maybeLoadConquestBin();
             }catch(Exception e){Toast.makeText(this,"加载失败",Toast.LENGTH_LONG).show();}
+        } else if (req == REQUEST_CONQUEST_BIN && res == RESULT_OK && data != null && data.getData() != null) {
+            try {
+                Uri uri = data.getData();
+                FileInputStream fis = (FileInputStream) getContentResolver().openInputStream(uri);
+                byte[] buf = new byte[fis.available()];
+                fis.read(buf);
+                fis.close();
+                String name = uri.getLastPathSegment();
+                if (name != null && name.contains("/")) name = name.substring(name.lastIndexOf('/') + 1);
+                FileParser.loadConquestTerrain(mapData, buf);
+                mapData.binOriginalData = buf;
+                mapData.binFileName = name;
+                hexMapView.setMapData(mapData);
+                hexMapView.refresh();
+                updateInfo();
+                selectedInfo.setText("已加载征服地形: " + (name == null ? "world.bin" : name));
+                Toast.makeText(this, "世界地形已加载，可编辑地形后保存", Toast.LENGTH_LONG).show();
+            } catch (Exception e) {
+                Toast.makeText(this, "世界地形加载失败: " + e.getMessage(), Toast.LENGTH_LONG).show();
+            }
         } else if (req == REQUEST_SAVE && res == RESULT_OK && data != null && data.getData() != null) {
             // 用户选择了保存目录
             Uri treeUri = data.getData();

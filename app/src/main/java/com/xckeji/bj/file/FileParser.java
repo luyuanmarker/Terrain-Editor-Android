@@ -6,6 +6,7 @@ import com.xckeji.bj.model.TerrainTile;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.function.IntUnaryOperator;
 
 public class FileParser {
 
@@ -26,8 +27,11 @@ public class FileParser {
         public int width, height, legionCount, buildingCount, armyCount;
         public int planCount, eventCount, weatherCount;
         public int reinforceCount, airstrikeCount, mineCount, strategyCount, airSupportCount;
+        public int placementCountA, placementCountB, capitalCount;
         public int terrainStart;
         public int buildingStart;
+        /** 地图序号==0 时 BTL 自带地形；征服地图（序号!=0）地形在 world BIN 中。 */
+        public boolean independentTerrain;
     }
 
     public static BtlHeaderInfo parseBTLHeader(byte[] data) {
@@ -47,12 +51,18 @@ public class FileParser {
         h.weatherCount = bb.getInt(0x2C);
         h.reinforceCount = bb.getInt(0x3C);
         h.airstrikeCount = bb.getInt(0x40);
+        h.placementCountA = bb.getInt(0x44);
+        h.placementCountB = bb.getInt(0x48);
+        h.capitalCount = bb.getInt(0x4C);
         h.mineCount = bb.getInt(0x68);
         h.strategyCount = bb.getInt(0x70);
         h.airSupportCount = bb.getInt(0x7C);
+        h.independentTerrain = (h.mapId == 0);
         h.terrainStart = 128 + h.legionCount * 300;
         int totalTiles = h.width * h.height;
-        int adminStart = h.terrainStart + totalTiles * 16;
+        // 征服地图（地图序号!=0）地形不在 BTL 中，直接是省规划段
+        int terrainBytes = h.independentTerrain ? totalTiles * 16 : 0;
+        int adminStart = h.terrainStart + terrainBytes;
         int ownershipStart = adminStart + totalTiles * 2;
         h.buildingStart = ownershipStart + totalTiles * 1;
         return h;
@@ -65,8 +75,17 @@ public class FileParser {
         mapData.btlOriginalData = data;
 
         int totalTiles = header.width * header.height;
-        for (int i = 0; i < totalTiles; i++) {
-            mapData.tiles.get(i).parseFromBytes(data, header.terrainStart + i * 16);
+        if (header.independentTerrain) {
+            for (int i = 0; i < totalTiles; i++) {
+                mapData.tiles.get(i).parseFromBytes(data, header.terrainStart + i * 16);
+            }
+        } else {
+            // 征服地图：地形来自 world BIN，此处只保留内容段
+            for (int i = 0; i < totalTiles; i++) {
+                TerrainTile t = mapData.tiles.get(i);
+                t.bmTerrain1Group = 1; // 占位海洋，加载 BIN 后会覆盖
+                t.bmTerrain1Id = 0;
+            }
         }
 
         if (header.buildingCount > 0) {
@@ -80,6 +99,7 @@ public class FileParser {
                 if (bx < header.width && by < header.height) mapData.setBuildingId(bx, by, type);
             }
         }
+        mapData.buildTerrainPatterns();
         return mapData;
     }
 
@@ -92,40 +112,77 @@ public class FileParser {
         if (mapData.btlOriginalData != null) {
             // 有原始BTL：基于原始数据修改（支持扩展后的文件）
             BtlHeaderInfo h = parseBTLHeader(mapData.btlOriginalData);
-            byte[] result = mapData.btlOriginalData.clone();
-            ByteBuffer bb = ByteBuffer.wrap(result).order(ByteOrder.LITTLE_ENDIAN);
-            bb.putInt(0x10, mapData.width);
-            bb.putInt(0x14, mapData.height);
-
+            byte[] oldBtl = mapData.btlOriginalData;
             int oldTotalTiles = h.width * h.height;
             int newTotalTiles = mapData.width * mapData.height;
             int terrainStart = h.terrainStart;
 
-            // 如果格子数没变（普通编辑），直接原地写入
-            if (oldTotalTiles == newTotalTiles) {
-                for (int i = 0; i < totalTiles; i++) {
-                    mapData.tiles.get(i).toBytes(result, terrainStart + i * 16);
-                }
-            } else {
-                // 格子数变了（扩展后），需要重建各段
-                int adminStart = terrainStart + newTotalTiles * 16;
-                int ownershipStart = adminStart + newTotalTiles * 2;
-                int buildingStart = ownershipStart + newTotalTiles * 1;
+            // 征服地图（地图序号!=0）地形不在 BTL 中，各段偏移不含地形
+            int oldTerrainBytes = h.independentTerrain ? oldTotalTiles * 16 : 0;
+            int newTerrainBytes = h.independentTerrain ? newTotalTiles * 16 : 0;
 
-                // 从扩展后文件中的 oldBtl 已包含正确扩展的数据，直接更新地形
-                // 文件大小可能已经变了，确保 result 长度正确
-                if (result.length < buildingStart) {
-                    // 文件太短，重建
-                    byte[] newBtl = new byte[buildingStart];
-                    System.arraycopy(result, 0, newBtl, 0, Math.min(result.length, terrainStart));
-                    result = newBtl;
-                }
-                for (int i = 0; i < totalTiles; i++) {
+            // 旧文件各段偏移
+            int oldAdminStart = terrainStart + oldTerrainBytes;
+            int oldOwnershipStart = oldAdminStart + oldTotalTiles * 2;
+            int oldBuildingStart = oldOwnershipStart + oldTotalTiles;
+            int oldBuildingBytes = h.buildingCount * 32;
+            int oldAfterBuildings = oldBtl.length - (oldBuildingStart + oldBuildingBytes);
+            if (oldAfterBuildings < 0) oldAfterBuildings = 0;
+
+            // 新文件各段偏移
+            int newAdminStart = terrainStart + newTerrainBytes;
+            int newOwnershipStart = newAdminStart + newTotalTiles * 2;
+            int newBuildingStart = newOwnershipStart + newTotalTiles;
+
+            // 建筑段：按内存建筑状态重建（保留未修改记录的全部字段）
+            byte[] newBuildings = mergeBuildings(oldBtl, oldBuildingStart, h.buildingCount, mapData);
+            int newBuildingBytes = newBuildings.length;
+
+            int newSize = newBuildingStart + newBuildingBytes + oldAfterBuildings;
+            byte[] result = new byte[newSize];
+
+            // 1. 头部与军团段
+            System.arraycopy(oldBtl, 0, result, 0, terrainStart);
+
+            // 2. 地形（16字节/格）——仅独立地图（地图序号==0）写入 BTL
+            if (h.independentTerrain) {
+                for (int i = 0; i < newTotalTiles; i++) {
                     mapData.tiles.get(i).toBytes(result, terrainStart + i * 16);
                 }
             }
-            // 对已有 BTL 不重建其后的业务段。它们包含不同版本游戏的私有字段，
-            // 原样保留才是游戏兼容的最安全方式。
+
+            // 3. 省规划（2字节/格）
+            for (int i = 0; i < newTotalTiles; i++) {
+                int addr = newAdminStart + i * 2;
+                if (i < oldTotalTiles) {
+                    result[addr] = oldBtl[oldAdminStart + i * 2];
+                    result[addr + 1] = oldBtl[oldAdminStart + i * 2 + 1];
+                } else {
+                    result[addr] = 0;
+                    result[addr + 1] = 0;
+                }
+            }
+
+            // 4. 军团归属（1字节/格）
+            for (int i = 0; i < newTotalTiles; i++) {
+                result[newOwnershipStart + i] = i < oldTotalTiles ? oldBtl[oldOwnershipStart + i] : (byte) 0xFF;
+            }
+
+            // 5. 建筑段
+            System.arraycopy(newBuildings, 0, result, newBuildingStart, newBuildingBytes);
+
+            // 6. 建筑之后的业务段/尾段原样搬运（保留版本私有字段）
+            if (oldAfterBuildings > 0) {
+                System.arraycopy(oldBtl, oldBuildingStart + oldBuildingBytes, result,
+                        newBuildingStart + newBuildingBytes, oldAfterBuildings);
+            }
+
+            // 7. 头部宽高、地块总数与建筑计数
+            ByteBuffer bb = ByteBuffer.wrap(result).order(ByteOrder.LITTLE_ENDIAN);
+            bb.putInt(0x10, mapData.width);
+            bb.putInt(0x14, mapData.height);
+            bb.putInt(0x58, newTotalTiles);
+            bb.putInt(0x1C, newBuildingBytes / 32);
             return result;
         } else {
             // 新建战役：写出标准 BTL 的完整基础段。可选业务段计数均为 0，
@@ -306,6 +363,58 @@ public class FileParser {
         return loadBTL(result, fileName);
     }
 
+    /**
+     * 按统一的 BTL 业务段布局，把建筑段之后各记录段中的“地块索引”字段交给 remap 处理。
+     * 段尺寸与顺序：建筑 32(由调用方处理) → 兵种 48 → 陷阱 12 → 方案 16 → 天气 16 → 事件 44
+     *   → 援军 80 → 空袭 20 → 放置单位 8 → 首都 4 → 战略建设 16 → 空中支援 16
+     * 只有含地块索引的字段才会被修正：兵种 0x0、陷阱 0x0、方案 0xC(目标地块)、援军 0x0、
+     * 空袭 0x0、放置单位 0x0、首都 0x0。
+     * 0 视为“无目标/未设置”，0xFFFF 视为哨兵，超出旧地块总数的值一律不修改。
+     *
+     * @param base 建筑段在目标文件中的起始偏移（从建筑段之后开始遍历）
+     */
+    public static void remapSectionTileIndexes(byte[] btl, int base, BtlHeaderInfo h, IntUnaryOperator remap) {
+        int oldTotal = h.width * h.height;
+        int cursor = base + h.buildingCount * 32;
+
+        remapSection(btl, cursor, h.armyCount, 48, 0, oldTotal, remap);
+        cursor += h.armyCount * 48;
+        remapSection(btl, cursor, h.mineCount, 12, 0, oldTotal, remap);
+        cursor += h.mineCount * 12;
+        remapSection(btl, cursor, h.planCount, 16, 12, oldTotal, remap); // 方案：目标地块在 0xC
+        cursor += h.planCount * 16;
+        cursor += h.weatherCount * 16;  // 天气：无地块索引
+        cursor += h.eventCount * 44;    // 事件：无地块索引
+        remapSection(btl, cursor, h.reinforceCount, 80, 0, oldTotal, remap);
+        cursor += h.reinforceCount * 80;
+        remapSection(btl, cursor, h.airstrikeCount, 20, 0, oldTotal, remap);
+        cursor += h.airstrikeCount * 20;
+        // 放置单位（0x44+0x48 计数）8字节/条：坐标在 0x0
+        remapSection(btl, cursor, h.placementCountA + h.placementCountB, 8, 0, oldTotal, remap);
+        cursor += (h.placementCountA + h.placementCountB) * 8;
+        // 首都（0x4C 计数）4字节/条：坐标在 0x0
+        remapSection(btl, cursor, h.capitalCount, 4, 0, oldTotal, remap);
+        cursor += h.capitalCount * 4;
+        cursor += h.strategyCount * 16;   // 战略建设：无地块索引
+        cursor += h.airSupportCount * 16; // 空中支援：无地块索引
+    }
+
+    private static void remapSection(byte[] btl, int base, int count, int recordSize, int fieldOffset,
+                                     int oldTotal, IntUnaryOperator remap) {
+        if (count <= 0 || base < 0) return;
+        for (int i = 0; i < count; i++) {
+            int addr = base + i * recordSize;
+            if (addr + fieldOffset + 2 > btl.length) break;
+            int idx = ByteBuffer.wrap(btl).order(ByteOrder.LITTLE_ENDIAN).getShort(addr + fieldOffset) & 0xFFFF;
+            if (idx > 0 && idx < oldTotal) {
+                int v = remap.applyAsInt(idx);
+                if (v < 0 || v > 0xFFFF) continue;
+                btl[addr + fieldOffset] = (byte) (v & 0xFF);
+                btl[addr + fieldOffset + 1] = (byte) ((v >>> 8) & 0xFF);
+            }
+        }
+    }
+
     /** 将编辑器中的建筑格子转换为紧凑的 32 字节 BTL 建筑记录。 */
     private static byte[] buildBuildings(MapData mapData) {
         int count = mapData.getBuildingCount();
@@ -323,6 +432,274 @@ public class FileParser {
         return records;
     }
 
+    /**
+     * 将编辑器内存中的建筑状态合并回原始建筑记录（32 字节/条，0x0=地块坐标，0x4=类型代码）：
+     * - 原记录仍存在的建筑：保留记录的全部字段，仅更新类型代码；
+     * - 原记录类型为 0（编辑器视为无建筑，但可能是游戏标记）：原样保留；
+     * - 原记录有建筑、内存中已被清除：丢弃该记录；
+     * - 内存新增的建筑：追加新记录（坐标 + 类型代码，其余字段默认 0）。
+     */
+    private static byte[] mergeBuildings(byte[] oldBtl, int oldBuildingStart, int oldBuildingCount,
+                                         MapData mapData) {
+        int total = mapData.getTotalTiles();
+        int newCount = mapData.getBuildingCount();
+        for (int i = 0; i < oldBuildingCount; i++) {
+            int addr = oldBuildingStart + i * 32;
+            if (addr + 32 > oldBtl.length) break;
+            int coord = ByteBuffer.wrap(oldBtl).order(ByteOrder.LITTLE_ENDIAN).getShort(addr) & 0xFFFF;
+            int bid = (coord >= 0 && coord < total) ? mapData.buildingIds.get(coord) : 0;
+            if (bid <= 0 && (oldBtl[addr + 4] & 0xFF) == 0) newCount++;
+        }
+        byte[] out = new byte[newCount * 32];
+        java.util.Map<Integer, Integer> oldRecordByTile = new java.util.HashMap<>();
+        for (int i = 0; i < oldBuildingCount; i++) {
+            int addr = oldBuildingStart + i * 32;
+            if (addr + 32 > oldBtl.length) break;
+            int coord = ByteBuffer.wrap(oldBtl).order(ByteOrder.LITTLE_ENDIAN).getShort(addr) & 0xFFFF;
+            oldRecordByTile.put(coord, addr);
+        }
+        int outIdx = 0;
+        // 原有记录：仍在内存中则保留并更新类型
+        for (int i = 0; i < oldBuildingCount; i++) {
+            int addr = oldBuildingStart + i * 32;
+            if (addr + 32 > oldBtl.length) break;
+            int coord = ByteBuffer.wrap(oldBtl).order(ByteOrder.LITTLE_ENDIAN).getShort(addr) & 0xFFFF;
+            int bid = (coord >= 0 && coord < total) ? mapData.buildingIds.get(coord) : 0;
+            if (bid > 0) {
+                System.arraycopy(oldBtl, addr, out, outIdx * 32, 32);
+                out[outIdx * 32 + 4] = (byte) bid;
+                outIdx++;
+            } else if ((oldBtl[addr + 4] & 0xFF) == 0) {
+                // 类型 0 的原记录：不是建筑，原样保留
+                System.arraycopy(oldBtl, addr, out, outIdx * 32, 32);
+                outIdx++;
+            }
+        }
+        // 新增建筑：内存有、原文件没有
+        for (int i = 0; i < total; i++) {
+            int bid = mapData.buildingIds.get(i);
+            if (bid <= 0 || oldRecordByTile.containsKey(i)) continue;
+            int off = outIdx * 32;
+            out[off] = (byte) (i & 0xFF);
+            out[off + 1] = (byte) ((i >>> 8) & 0xFF);
+            out[off + 4] = (byte) bid;
+            outIdx++;
+        }
+        return out;
+    }
+
+    /**
+     * 裁剪地图：仅保留 [ax,ay] 到 [bx,by] 矩形区域（含端点），其余删除。
+     * - 内存 tiles/buildingIds/采样色 裁剪；
+     * - 独立 BTL：裁剪地形/省规划/归属数组，建筑及各坐标记录筛选+坐标重映射；
+     * - 征服地图：同时更新头部截取坐标（0x08/0x0C）与宽高，世界 BIN 保持不动；
+     * - 纯 BIN 地图：重建简化 BIN。
+     */
+    public static MapData cropMap(MapData mapData, int ax, int ay, int bx, int by) throws IOException {
+        if (mapData == null) throw new IOException("未加载地图");
+        int x1 = Math.min(ax, bx), x2 = Math.max(ax, bx);
+        int y1 = Math.min(ay, by), y2 = Math.max(ay, by);
+        int newW = x2 - x1 + 1, newH = y2 - y1 + 1;
+        if (newW < 3 || newH < 3 || newW > 200 || newH > 200) {
+            throw new IOException("裁剪后宽高范围为 3–200");
+        }
+        int oldW = mapData.width, oldH = mapData.height;
+        if (x1 < 0 || y1 < 0 || x2 >= oldW || y2 >= oldH) throw new IOException("裁剪区域超出地图");
+
+        // 1. 内存裁剪
+        java.util.List<TerrainTile> newTiles = new java.util.ArrayList<>(newW * newH);
+        java.util.List<Integer> newBids = new java.util.ArrayList<>(newW * newH);
+        java.util.List<Integer> newSampled = new java.util.ArrayList<>(newW * newH);
+        for (int y = y1; y <= y2; y++) {
+            for (int x = x1; x <= x2; x++) {
+                int si = y * oldW + x;
+                newTiles.add(mapData.tiles.get(si));
+                newBids.add(mapData.buildingIds.get(si));
+                newSampled.add(mapData.sampledColors != null && si < mapData.sampledColors.size()
+                        ? mapData.sampledColors.get(si) : 0);
+            }
+        }
+        mapData.tiles = newTiles;
+        mapData.buildingIds = newBids;
+        mapData.sampledColors = newSampled;
+        mapData.width = newW;
+        mapData.height = newH;
+        mapData.selectedBlocks.clear();
+        mapData.multiSelectMode = false;
+        mapData.editedCells.clear();
+
+        if (mapData.btlOriginalData != null) {
+            byte[] oldBtl = mapData.btlOriginalData;
+            BtlHeaderInfo h = parseBTLHeader(oldBtl);
+            int oldTotal = oldW * oldH, newTotal = newW * newH;
+            int terrainStart = h.terrainStart;
+            int oldTerrainBytes = h.independentTerrain ? oldTotal * 16 : 0;
+            int oldAdminStart = terrainStart + oldTerrainBytes;
+            int oldOwnershipStart = oldAdminStart + oldTotal * 2;
+            int oldBuildingStart = oldOwnershipStart + oldTotal;
+            int oldBuildingBytes = h.buildingCount * 32;
+            int oldAfterBuildings = oldBtl.length - (oldBuildingStart + oldBuildingBytes);
+            if (oldAfterBuildings < 0) oldAfterBuildings = 0;
+
+            int newTerrainBytes = h.independentTerrain ? newTotal * 16 : 0;
+            int newAdminStart = terrainStart + newTerrainBytes;
+            int newOwnershipStart = newAdminStart + newTotal * 2;
+
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            out.write(oldBtl, 0, terrainStart);
+            // 地形（仅独立地图）
+            if (h.independentTerrain) {
+                for (int y = y1; y <= y2; y++) {
+                    for (int x = x1; x <= x2; x++) {
+                        out.write(oldBtl, terrainStart + (y * oldW + x) * 16, 16);
+                    }
+                }
+            }
+            // 省规划（2字节/格）
+            for (int y = y1; y <= y2; y++) {
+                for (int x = x1; x <= x2; x++) {
+                    int si = y * oldW + x;
+                    out.write(oldBtl[oldAdminStart + si * 2]);
+                    out.write(oldBtl[oldAdminStart + si * 2 + 1]);
+                }
+            }
+            // 军团归属（1字节/格）
+            for (int y = y1; y <= y2; y++) {
+                for (int x = x1; x <= x2; x++) {
+                    out.write(oldBtl[oldOwnershipStart + y * oldW + x]);
+                }
+            }
+            // 建筑：区域内保留 + 坐标重映射
+            int[] bCount = {0};
+            cropBuildings(out, oldBtl, oldBuildingStart, h.buildingCount,
+                    oldW, x1, y1, newW, newH, oldTotal, mapData, bCount);
+            // 建筑之后各段
+            int cursor = oldBuildingStart + oldBuildingBytes;
+            int[] armyKept = {0};
+            cursor = cropCoordSection(out, oldBtl, cursor, h.armyCount, 48, 0,
+                    oldW, x1, y1, newW, newH, oldTotal, false, armyKept);
+            int[] mineKept = {0};
+            cursor = cropCoordSection(out, oldBtl, cursor, h.mineCount, 12, 0,
+                    oldW, x1, y1, newW, newH, oldTotal, false, mineKept);
+            int[] planKept = {0};
+            cursor = cropCoordSection(out, oldBtl, cursor, h.planCount, 16, 12,
+                    oldW, x1, y1, newW, newH, oldTotal, true, planKept);
+            cursor = copySection(out, oldBtl, cursor, h.weatherCount, 16);
+            cursor = copySection(out, oldBtl, cursor, h.eventCount, 44);
+            int[] reinfKept = {0};
+            cursor = cropCoordSection(out, oldBtl, cursor, h.reinforceCount, 80, 0,
+                    oldW, x1, y1, newW, newH, oldTotal, false, reinfKept);
+            int[] airKept = {0};
+            cursor = cropCoordSection(out, oldBtl, cursor, h.airstrikeCount, 20, 0,
+                    oldW, x1, y1, newW, newH, oldTotal, false, airKept);
+            int[] placeAKept = {0};
+            cursor = cropCoordSection(out, oldBtl, cursor, h.placementCountA, 8, 0,
+                    oldW, x1, y1, newW, newH, oldTotal, false, placeAKept);
+            int[] placeBKept = {0};
+            cursor = cropCoordSection(out, oldBtl, cursor, h.placementCountB, 8, 0,
+                    oldW, x1, y1, newW, newH, oldTotal, false, placeBKept);
+            int[] capKept = {0};
+            cursor = cropCoordSection(out, oldBtl, cursor, h.capitalCount, 4, 0,
+                    oldW, x1, y1, newW, newH, oldTotal, false, capKept);
+            cursor = copySection(out, oldBtl, cursor, h.strategyCount, 16);
+            copySection(out, oldBtl, cursor, h.airSupportCount, 16);
+
+            byte[] result = out.toByteArray();
+            ByteBuffer bb = ByteBuffer.wrap(result).order(ByteOrder.LITTLE_ENDIAN);
+            if (!h.independentTerrain) {
+                // 征服地图：截取窗口向右下移动
+                bb.putInt(0x08, h.captureX + x1);
+                bb.putInt(0x0C, h.captureY + y1);
+            }
+            bb.putInt(0x10, newW);
+            bb.putInt(0x14, newH);
+            bb.putInt(0x58, newTotal);
+            bb.putInt(0x1C, bCount[0]);
+            bb.putInt(0x20, armyKept[0]);
+            bb.putInt(0x24, planKept[0]);
+            bb.putInt(0x3C, reinfKept[0]);
+            bb.putInt(0x40, airKept[0]);
+            bb.putInt(0x44, placeAKept[0]);
+            bb.putInt(0x48, placeBKept[0]);
+            bb.putInt(0x4C, capKept[0]);
+            bb.putInt(0x68, mineKept[0]);
+            mapData.btlOriginalData = result;
+        } else if (mapData.binOriginalData != null) {
+            // 纯 BIN 地图：重建简化 BIN（16字节头 + 裁剪后地形）
+            byte[] bin = new byte[16 + newW * newH * 16];
+            ByteBuffer bb = ByteBuffer.wrap(bin).order(ByteOrder.LITTLE_ENDIAN);
+            bb.putInt(8, newW);
+            bb.putInt(12, newH);
+            for (int i = 0; i < newW * newH; i++) {
+                mapData.tiles.get(i).toBytes(bin, 16 + i * 16);
+            }
+            mapData.binOriginalData = bin;
+        }
+        mapData.buildTerrainPatterns();
+        return mapData;
+    }
+
+    private static int copySection(java.io.ByteArrayOutputStream out, byte[] src, int base,
+                                   int count, int recSize) {
+        int bytes = count * recSize;
+        if (bytes > 0) out.write(src, base, bytes);
+        return base + bytes;
+    }
+
+    /**
+     * 裁剪含坐标的记录段：仅保留落在 [x1,x2]×[y1,y2] 内的记录，坐标重映射到新地图。
+     * keepZero 为 true 时坐标 0 视为“无目标/未设置”，原样保留（用于方案段）。
+     */
+    private static int cropCoordSection(java.io.ByteArrayOutputStream out, byte[] src, int base, int count,
+                                        int recSize, int fieldOffset, int oldW, int x1, int y1,
+                                        int newW, int newH, int oldTotal, boolean keepZero, int[] kept) {
+        for (int i = 0; i < count; i++) {
+            int addr = base + i * recSize;
+            if (addr + recSize > src.length) break;
+            int coord = ByteBuffer.wrap(src).order(ByteOrder.LITTLE_ENDIAN).getShort(addr + fieldOffset) & 0xFFFF;
+            if (keepZero && coord == 0) {
+                out.write(src, addr, recSize);
+                if (kept != null) kept[0]++;
+                continue;
+            }
+            if (coord >= oldTotal) continue;
+            int x = coord % oldW, y = coord / oldW;
+            if (x >= x1 && x < x1 + newW && y >= y1 && y < y1 + newH) {
+                int nc = (y - y1) * newW + (x - x1);
+                byte[] rec = new byte[recSize];
+                System.arraycopy(src, addr, rec, 0, recSize);
+                rec[fieldOffset] = (byte) (nc & 0xFF);
+                rec[fieldOffset + 1] = (byte) ((nc >> 8) & 0xFF);
+                out.write(rec, 0, recSize);
+                if (kept != null) kept[0]++;
+            }
+        }
+        return base + count * recSize;
+    }
+
+    /** 裁剪建筑段：区域内保留，坐标重映射；类型代码按内存状态更新。 */
+    private static void cropBuildings(java.io.ByteArrayOutputStream out, byte[] src, int base, int count,
+                                      int oldW, int x1, int y1, int newW, int newH,
+                                      int oldTotal, MapData mapData, int[] outCount) {
+        for (int i = 0; i < count; i++) {
+            int addr = base + i * 32;
+            if (addr + 32 > src.length) break;
+            int coord = ByteBuffer.wrap(src).order(ByteOrder.LITTLE_ENDIAN).getShort(addr) & 0xFFFF;
+            if (coord >= oldTotal) continue;
+            int x = coord % oldW, y = coord / oldW;
+            if (x >= x1 && x < x1 + newW && y >= y1 && y < y1 + newH) {
+                byte[] rec = new byte[32];
+                System.arraycopy(src, addr, rec, 0, 32);
+                int nc = (y - y1) * newW + (x - x1);
+                rec[0] = (byte) (nc & 0xFF);
+                rec[1] = (byte) ((nc >> 8) & 0xFF);
+                int bid = mapData.buildingIds.get((y - y1) * newW + (x - x1));
+                if (bid > 0) rec[4] = (byte) bid;
+                out.write(rec, 0, 32);
+                outCount[0]++;
+            }
+        }
+    }
     // ========= BIN =========
 
     private static MapData loadBIN(byte[] data, String fileName) throws IOException {
@@ -330,17 +707,44 @@ public class FileParser {
         int width = bb.getInt(8), height = bb.getInt(12);
         MapData mapData = new MapData(width, height);
         mapData.fileName = fileName;
+        mapData.binOriginalData = data;
         int totalTiles = width * height;
         for (int i = 0; i < totalTiles; i++) {
             int addr = 16 + i * 16;
             if (addr + 16 > data.length) break;
             mapData.tiles.get(i).parseFromBytes(data, addr);
         }
+        mapData.buildTerrainPatterns();
         return mapData;
     }
 
     public static byte[] saveAsBIN(MapData mapData) throws IOException {
         int totalTiles = mapData.width * mapData.height;
+        if (mapData.binOriginalData != null) {
+            // 世界地形 BIN：保留头 16 字节与地形之后的省规划段，仅原地更新截取区域的地形
+            byte[] bin = mapData.binOriginalData.clone();
+            ByteBuffer bb = ByteBuffer.wrap(bin).order(ByteOrder.LITTLE_ENDIAN);
+            int binW = bb.getInt(8), binH = bb.getInt(12);
+            if (binW <= 0 || binH <= 0 || 16 + binW * binH * 16 > bin.length) {
+                throw new IOException("BIN 地形数据不完整");
+            }
+            int cropX = 0, cropY = 0;
+            if (mapData.btlOriginalData != null) {
+                BtlHeaderInfo h = parseBTLHeader(mapData.btlOriginalData);
+                cropX = h.captureX;
+                cropY = h.captureY;
+            }
+            if (cropX < 0 || cropY < 0 || cropX + mapData.width > binW || cropY + mapData.height > binH) {
+                throw new IOException("地图截取区域超出 BIN 范围");
+            }
+            for (int y = 0; y < mapData.height; y++) {
+                for (int x = 0; x < mapData.width; x++) {
+                    int dst = 16 + ((y + cropY) * binW + (x + cropX)) * 16;
+                    mapData.tiles.get(y * mapData.width + x).toBytes(bin, dst);
+                }
+            }
+            return bin;
+        }
         int totalSize = 16 + totalTiles * 16;
         byte[] result = new byte[totalSize];
         ByteBuffer bb = ByteBuffer.wrap(result).order(ByteOrder.LITTLE_ENDIAN);
@@ -352,5 +756,32 @@ public class FileParser {
             mapData.tiles.get(i).toBytes(result, 16 + i * 16);
         }
         return result;
+    }
+
+    /**
+     * 征服地图：从 world BIN 中按 BTL 的截取区域（0x08/0x0C）读取地形填入 mapData。
+     * 地图格子 (bx,by) 对应 BIN 格子 (bx+截取X, by+截取Y)。
+     */
+    public static void loadConquestTerrain(MapData mapData, byte[] binData) throws IOException {
+        if (mapData == null || mapData.btlOriginalData == null) throw new IOException("缺少 BTL 数据");
+        BtlHeaderInfo h = parseBTLHeader(mapData.btlOriginalData);
+        if (h.independentTerrain) throw new IOException("该 BTL 自带地形，无需 BIN");
+        if (binData == null || binData.length < 16) throw new IOException("BIN 文件无效");
+        ByteBuffer bb = ByteBuffer.wrap(binData).order(ByteOrder.LITTLE_ENDIAN);
+        int binW = bb.getInt(8), binH = bb.getInt(12);
+        if (binW <= 0 || binH <= 0 || 16 + binW * binH * 16 > binData.length) {
+            throw new IOException("BIN 地形数据不完整");
+        }
+        if (h.captureX < 0 || h.captureY < 0
+                || h.captureX + h.width > binW || h.captureY + h.height > binH) {
+            throw new IOException("BTL 截取区域超出 BIN 范围");
+        }
+        for (int y = 0; y < h.height; y++) {
+            for (int x = 0; x < h.width; x++) {
+                int src = 16 + ((y + h.captureY) * binW + (x + h.captureX)) * 16;
+                mapData.tiles.get(y * h.width + x).parseFromBytes(binData, src);
+            }
+        }
+        mapData.buildTerrainPatterns();
     }
 }

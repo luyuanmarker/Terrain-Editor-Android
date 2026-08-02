@@ -16,6 +16,7 @@ import android.view.MotionEvent;
 import android.view.View;
 
 import com.xckeji.bj.model.MapData;
+import com.xckeji.bj.model.TerrainColors;
 import com.xckeji.bj.model.TerrainTile;
 
 import java.io.InputStream;
@@ -30,6 +31,14 @@ public class HexMapView extends View {
     private OnTileSelectListener listener;
     private GestureDetector gestureDetector;
     private Paint tilePaint, gridPaint, selectedPaint;
+    private Paint multiPaint;
+    // 专门用于绘制位图的 Paint：固定白色（白色=不染色），避免残留颜色把贴图染花
+    private final Paint bitmapPaint;
+    // 性能优化：复用同一个 Path，避免每格每帧 new
+    private final Path sharedPath = new Path();
+    // 六边形贴图缓存：每个 (地形组,ID) 预渲染一次，避免每帧 clipPath
+    private final Map<String, Bitmap> hexTileCache = new HashMap<>();
+    private float cachedHexSize = -1f;
 
     // 图片——懒加载，首次绘制时初始化
     private Bitmap landBmp;
@@ -64,6 +73,13 @@ public class HexMapView extends View {
         selectedPaint.setStyle(Paint.Style.STROKE);
         selectedPaint.setStrokeWidth(3f);
         selectedPaint.setColor(0xFFfbbf24);
+        multiPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        multiPaint.setStyle(Paint.Style.STROKE);
+        multiPaint.setStrokeWidth(3f);
+        multiPaint.setColor(0xFF10b981);
+        bitmapPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        bitmapPaint.setFilterBitmap(true);
+        bitmapPaint.setColor(0xFFFFFFFF);
         gestureDetector = new GestureDetector(context, new GestureListener());
     }
 
@@ -98,13 +114,60 @@ public class HexMapView extends View {
         } catch (Exception e) { return null; }
     }
 
-    public void setMapData(MapData data) { mapData = data; selectedX = -1; selectedY = -1; scale = 1f; post(() -> { centerMap(); invalidate(); }); }
+    public void setMapData(MapData data) {
+        mapData = data; selectedX = -1; selectedY = -1; scale = 1f;
+        hexTileCache.clear(); cachedHexSize = -1f;
+        post(() -> { centerMap(); invalidate(); });
+    }
     public MapData getMapData() { return mapData; }
     public interface OnTileSelectListener { void onTileSelected(int x, int y, TerrainTile tile); }
     public void setOnTileSelectListener(OnTileSelectListener l) { listener = l; }
     public int getSelectedX() { return selectedX; }
     public int getSelectedY() { return selectedY; }
     public void refresh() { invalidate(); }
+
+    /** 把整张地图按基准比例渲染成一张 PNG 位图（用于导出/截图分享）。 */
+    public Bitmap renderFullMap() {
+        if (mapData == null) return null;
+        float oldScale = scale;
+        float oldOx = offsetX, oldOy = offsetY;
+        scale = 1f;
+        offsetX = 0;
+        offsetY = 0;
+        hexTileCache.clear();
+        cachedHexSize = -1f;
+        try {
+            float s = hs();
+            int W = (int) Math.ceil(s * 1.5f * mapData.width + s);
+            int H = (int) Math.ceil(s * (float) Math.sqrt(3) * (mapData.height + 0.5f));
+            Bitmap bmp = Bitmap.createBitmap(Math.max(W, 1), Math.max(H, 1), Bitmap.Config.ARGB_8888);
+            Canvas c = new Canvas(bmp);
+            c.drawColor(0xFFe8ecef);
+            for (int y = 0; y < mapData.height; y++) {
+                for (int x = 0; x < mapData.width; x++) {
+                    TerrainTile tile = mapData.getTile(x, y);
+                    if (tile == null) continue;
+                    float px = hcx(x), py = hcy(x, y);
+                    int gid = tile.bmTerrain1Group;
+                    int tid = tile.bmTerrain1Id;
+                    if (tid == 0) tid = 1;
+                    Bitmap hexBmp = getHexTileBmp(gid, tid);
+                    if (hexBmp != null) c.drawBitmap(hexBmp, px - s, py - s, bitmapPaint);
+                    buildHexPath(px, py);
+                    gridPaint.setStrokeWidth(Math.max(0.5f, scale * 0.8f));
+                    c.drawPath(sharedPath, gridPaint);
+                }
+            }
+            return bmp;
+        } finally {
+            scale = oldScale;
+            offsetX = oldOx;
+            offsetY = oldOy;
+            hexTileCache.clear();
+            cachedHexSize = -1f;
+            invalidate();
+        }
+    }
 
     /** 设置底图（自适应铺满地图区域） */
     /** 设置底图并自动采样每个六边形中心颜色 */
@@ -180,6 +243,75 @@ public class HexMapView extends View {
         p.close(); return p;
     }
 
+    /** 复用 sharedPath 构建当前六边形路径（避免每帧 new Path）。 */
+    private void buildHexPath(float cx, float cy) {
+        float s = hs();
+        sharedPath.reset();
+        for (int i = 0; i < 6; i++) {
+            double a = 2 * Math.PI * i / 6;
+            float x = cx + s * (float) Math.cos(a);
+            float y = cy + s * (float) Math.sin(a);
+            if (i == 0) sharedPath.moveTo(x, y); else sharedPath.lineTo(x, y);
+        }
+        sharedPath.close();
+    }
+
+    /**
+     * 获取 (gid,tid) 的六边形贴图缓存：底色+贴图一次性 clip 到六边形，
+     * 之后每帧只需一次 drawBitmap，不再逐格 clipPath。
+     */
+    private Bitmap getHexTileBmp(int gid, int tid) {
+        float s = hs();
+        if (s != cachedHexSize) {
+            hexTileCache.clear();
+            cachedHexSize = s;
+        }
+        String key = gid + "_" + tid;
+        Bitmap cached = hexTileCache.get(key);
+        if (cached != null) return cached;
+
+        int size = (int) Math.ceil(s * 2);
+        if (size <= 0) return null;
+        Bitmap bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+        Canvas c = new Canvas(bmp);
+        Path p = new Path();
+        float cx = size / 2f, cy = size / 2f;
+        for (int i = 0; i < 6; i++) {
+            double a = 2 * Math.PI * i / 6;
+            float x = cx + s * (float) Math.cos(a);
+            float y = cy + s * (float) Math.sin(a);
+            if (i == 0) p.moveTo(x, y); else p.lineTo(x, y);
+        }
+        p.close();
+
+        Paint basePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        basePaint.setColor(TerrainColors.getColor(gid));
+        c.drawPath(p, basePaint);
+
+        Bitmap tex = null;
+        if (gid == 0) tex = landBmp;
+        else if (gid == 1) tex = seaBmp;
+        else {
+            String base = G2B.get(gid);
+            if (base != null && terrainBmps != null) {
+                tex = terrainBmps.get(gid + "_" + tid);
+                if (tex == null && tid > 1) tex = terrainBmps.get(gid + "_1");
+            }
+            if (tex == null) tex = landBmp;
+        }
+        if (tex != null) {
+            Paint texPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+            texPaint.setFilterBitmap(true);
+            texPaint.setColor(0xFFFFFFFF); // 白色 = 不染色
+            c.save();
+            c.clipPath(p);
+            c.drawBitmap(tex, null, new RectF(0, 0, size, size), texPaint);
+            c.restore();
+        }
+        hexTileCache.put(key, bmp);
+        return bmp;
+    }
+
     private void centerMap() {
         if (mapData == null || getWidth() <= 0 || getHeight() <= 0) return;
         float mw = 20f*1.5f*mapData.width+20f, mh = 20f*(float)Math.sqrt(3)*(mapData.height+0.5f);
@@ -240,39 +372,34 @@ public class HexMapView extends View {
                 int tid = tile.bmTerrain1Id;
                 if (tid == 0) tid = 1;
 
-                Path path = hp(px, py);
-
-                // 1. 底色
                 int cellIdx = y * mapData.width + x;
                 boolean useSampled = overlayVisible && mapData.sampledColors != null
                     && cellIdx < mapData.sampledColors.size()
                     && mapData.sampledColors.get(cellIdx) != 0
                     && !mapData.editedCells.contains(cellIdx);
-                int baseColor;
-                if (useSampled) {
-                    baseColor = mapData.sampledColors.get(cellIdx);
-                } else {
-                    baseColor = tile.getTerrainColor();
-                }
+                int baseColor = useSampled ? mapData.sampledColors.get(cellIdx) : tile.getTerrainColor();
+
+                // 1. 底色
+                buildHexPath(px, py);
                 tilePaint.setColor(baseColor);
-                canvas.drawPath(path, tilePaint);
+                canvas.drawPath(sharedPath, tilePaint);
 
                 // 2. clip + 贴图（采样色格子不画贴图，只显示纯色）
                 if (useSampled) {
                     // 不画贴图
                 } else {
-                    tilePaint.setAlpha(255);
                     canvas.save();
-                    canvas.clipPath(path);
+                    canvas.clipPath(sharedPath);
                     float hh = hs();
                     float hx1 = px - hh, hy1 = py - hh, hx2 = px + hh, hy2 = py + hh;
+                    Rect dst = new Rect((int) hx1, (int) hy1, (int) hx2, (int) hy2);
                     if (gid == 0 && landBmp != null) {
-                        canvas.drawBitmap(landBmp, null, new Rect((int)hx1,(int)hy1,(int)hx2,(int)hy2), tilePaint);
+                        canvas.drawBitmap(landBmp, null, dst, bitmapPaint);
                     } else if (gid == 1 && seaBmp != null) {
-                        canvas.drawBitmap(seaBmp, null, new Rect((int)hx1,(int)hy1,(int)hx2,(int)hy2), tilePaint);
+                        canvas.drawBitmap(seaBmp, null, dst, bitmapPaint);
                     } else {
                         if (landBmp != null) {
-                            canvas.drawBitmap(landBmp, null, new Rect((int)hx1,(int)hy1,(int)hx2,(int)hy2), tilePaint);
+                            canvas.drawBitmap(landBmp, null, dst, bitmapPaint);
                         }
                         String base = G2B.get(gid);
                         if (base != null && terrainBmps != null) {
@@ -280,7 +407,7 @@ public class HexMapView extends View {
                             Bitmap bmp = terrainBmps.get(key);
                             if (bmp == null && tid > 1) bmp = terrainBmps.get(gid + "_1");
                             if (bmp != null) {
-                                canvas.drawBitmap(bmp, null, new Rect((int)hx1,(int)hy1,(int)hx2,(int)hy2), tilePaint);
+                                canvas.drawBitmap(bmp, null, dst, bitmapPaint);
                             }
                         }
                     }
@@ -289,26 +416,19 @@ public class HexMapView extends View {
 
                 // 3. 网格
                 gridPaint.setStrokeWidth(Math.max(0.5f, scale*0.8f));
-                canvas.drawPath(path, gridPaint);
+                canvas.drawPath(sharedPath, gridPaint);
 
-                // 4a. 多选高亮
-                if (mapData != null && mapData.multiSelectMode) {
-                    int idx = y * mapData.width + x;
-                    if (mapData.selectedBlocks.contains(idx)) {
-                        Paint multiPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-                        multiPaint.setStyle(Paint.Style.STROKE);
-                        multiPaint.setStrokeWidth(3f);
-                        multiPaint.setColor(0xFF10b981);
-                        canvas.drawPath(path, multiPaint);
-                    }
+                // 4. 多选高亮
+                if (mapData.multiSelectMode && mapData.selectedBlocks.contains(cellIdx)) {
+                    canvas.drawPath(sharedPath, multiPaint);
                 }
-                // 4b. 当前选中（自定义边框图片）
+                // 5. 当前选中（自定义边框图片）
                 if (selectedX == x && selectedY == y) {
                     if (borderSelectedBmp != null) {
                         canvas.save();
-                        canvas.clipPath(path);
+                        canvas.clipPath(sharedPath);
                         RectF bounds = new RectF();
-                        path.computeBounds(bounds, true);
+                        sharedPath.computeBounds(bounds, true);
                         float bw = bounds.width();
                         float bh = bounds.height();
                         float imgW = borderSelectedBmp.getWidth();
@@ -321,10 +441,10 @@ public class HexMapView extends View {
                         float top = bounds.centerY() - drawH / 2f;
                         canvas.drawBitmap(borderSelectedBmp, null,
                             new RectF(left, top, left + drawW, top + drawH),
-                            tilePaint);
+                            bitmapPaint);
                         canvas.restore();
                     } else {
-                        canvas.drawPath(path, selectedPaint);
+                        canvas.drawPath(sharedPath, selectedPaint);
                     }
                 }
 
@@ -344,7 +464,7 @@ public class HexMapView extends View {
                     Bitmap bb = buildingBmps.get(bid);
                     if (bb != null) {
                         canvas.save();
-                        canvas.clipPath(path);
+                        canvas.clipPath(sharedPath);
                         float sh = hs();
                         canvas.drawBitmap(bb, null,
                             new Rect((int)(px-sh), (int)(py-sh), (int)(px+sh), (int)(py+sh)),
@@ -526,8 +646,9 @@ public class HexMapView extends View {
             if (idx < 0 || idx >= mapData.tiles.size()) continue;
             TerrainTile tt = mapData.tiles.get(idx);
             if (tt == null) continue;
-            tt.bmTerrain1Group = g;
-            tt.bmTerrain1Id = (g == 0) ? 255 : 0;
+            byte[] pat = mapData.getTerrainPattern(g);
+            if (pat != null) tt.parseFromBytes(pat, 0);
+            else tt.setTerrain(g);
             mapData.editedCells.add(idx);
         }
         selectedX = x; selectedY = y;

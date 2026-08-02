@@ -47,5 +47,29 @@ public class TerrainTile {
         data[offset+15]  = (byte) floorY;
     }
 
+    /**
+     * 设置地形组并清掉覆盖层。游戏用三层渲染：0x0 地形组 + 0x4/0x8 两个覆盖层，
+     * 覆盖层 0x3F 表示“无”。只改地形组会残留旧覆盖层（例如海洋的波浪层），
+     * 导致涂上去的地形被覆盖层遮住不显示。
+     */
+    public void setTerrain(int group) {
+        bmTerrain1Group = group;
+        bmTerrain1Id = (group == 0) ? 0xFF : 0;
+        bmTerrain1X = 0;
+        bmTerrain1Y = 0;
+        decoration1Group = 0x3F;
+        decoration1Id = 0xFF;
+        decoration1X = 0;
+        decoration1Y = 0;
+        decoration2Group = 0x3F;
+        decoration2Id = 0xFF;
+        decoration2X = 0;
+        decoration2Y = 0;
+        floorGroup = 0;
+        floorId = 0;
+        floorX = 0;
+        floorY = 0;
+    }
+
     public int getTerrainColor() { return TerrainColors.getColor(bmTerrain1Group); }
 }
