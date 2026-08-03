@@ -2,6 +2,7 @@ package com.xckeji.bj.file;
 
 import com.xckeji.bj.model.MapData;
 import com.xckeji.bj.model.TerrainTile;
+import com.xckeji.bj.model.ArmyConfig;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -68,6 +69,16 @@ public class FileParser {
         return h;
     }
 
+    /** 兵种记录大小：版本1=48字节，版本2/3=64字节。 */
+    private static int armyRecSize(int version) {
+        return version == 1 ? 48 : 64;
+    }
+
+    /** 援军记录大小：版本1/2=80字节，版本3=104字节。 */
+    private static int reinforceRecSize(int version) {
+        return version <= 2 ? 80 : 104;
+    }
+
     private static MapData loadBTL(byte[] data, String fileName) throws IOException {
         BtlHeaderInfo header = parseBTLHeader(data);
         MapData mapData = new MapData(header.width, header.height);
@@ -99,8 +110,214 @@ public class FileParser {
                 if (bx < header.width && by < header.height) mapData.setBuildingId(bx, by, type);
             }
         }
+        parseContentSections(mapData, data, header);
         mapData.buildTerrainPatterns();
         return mapData;
+    }
+
+    /** 解析军团颜色、军团归属与兵种列表（兵种段 48 字节/条）。 */
+    private static void parseContentSections(MapData mapData, byte[] data, BtlHeaderInfo header) {
+        int totalTiles = header.width * header.height;
+        // 省规划（2字节/格）
+        int adminStart = header.terrainStart + (header.independentTerrain ? totalTiles * 16 : 0);
+        mapData.provinces = new int[totalTiles];
+        for (int i = 0; i < totalTiles; i++) {
+            if (adminStart + i * 2 + 2 <= data.length) {
+                mapData.provinces[i] = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
+                        .getShort(adminStart + i * 2) & 0xFFFF;
+            }
+        }
+        int ownershipStart = header.buildingStart - totalTiles;
+        mapData.belongs = new byte[totalTiles];
+        if (ownershipStart >= 0 && ownershipStart + totalTiles <= data.length) {
+            System.arraycopy(data, ownershipStart, mapData.belongs, 0, totalTiles);
+        }
+        mapData.legionColors = new int[header.legionCount];
+        mapData.legionCountries = new int[header.legionCount];
+        mapData.legions.clear();
+        for (int i = 0; i < header.legionCount; i++) {
+            int addr = 128 + i * 300;
+            if (addr + 300 > data.length) break;
+            mapData.legionCountries[i] = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN).getShort(addr + 0x4) & 0xFFFF;
+            int r = data[addr + 0x28] & 0xFF;
+            int g = data[addr + 0x29] & 0xFF;
+            int b = data[addr + 0x2A] & 0xFF;
+            mapData.legionColors[i] = 0xFF000000 | (r << 16) | (g << 8) | b;
+            MapData.Legion lg = new MapData.Legion();
+            System.arraycopy(data, addr, lg.raw, 0, 300);
+            ByteBuffer lb = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
+            lg.seq = lb.getInt(addr);
+            lg.country = lb.getInt(addr + 0x4);
+            lg.control = lb.getInt(addr + 0x14);
+            lg.faction = lb.getInt(addr + 0x18);
+            lg.color = mapData.legionColors[i];
+            mapData.legions.add(lg);
+        }
+        mapData.armies.clear();
+        int armyStart = header.buildingStart + header.buildingCount * 32;
+        int recSize = armyRecSize(header.version);
+        for (int i = 0; i < header.armyCount; i++) {
+            int addr = armyStart + i * recSize;
+            if (addr + recSize > data.length) break;
+            int coord = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN).getShort(addr) & 0xFFFF;
+            int type = data[addr + 2] & 0xFF;
+            // 兵种代码 0 = 空占位记录（坐标 0/0xFFFF、全字段为 0），不显示
+            if (type == 0) continue;
+            int level = data[addr + 3] & 0xFF;
+            int ax = coord % header.width;
+            int ay = coord / header.width;
+            if (ax < header.width && ay < header.height) {
+                MapData.Army a = new MapData.Army(ax, ay, type, level);
+                a.index = i;
+                a.raw = new byte[recSize];
+                System.arraycopy(data, addr, a.raw, 0, recSize);
+                ArmyConfig cfg = ArmyConfig.byArmy(type);
+                if (cfg != null) a.name = cfg.name;
+                mapData.armies.add(a);
+            }
+        }
+        // 城市/建筑记录（32 字节/条）：0x0 坐标、0x2 名称、0x4 类型、0x5 外观…
+        mapData.buildings.clear();
+        for (int i = 0; i < header.buildingCount; i++) {
+            int addr = header.buildingStart + i * 32;
+            if (addr + 32 > data.length) break;
+            int coord = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
+                    .getShort(addr) & 0xFFFF;
+            int type = data[addr + 4] & 0xFF;
+            int bx = coord % header.width;
+            int by = coord / header.width;
+            if (bx < header.width && by < header.height) {
+                MapData.Building b = new MapData.Building();
+                b.index = i;
+                b.coord = coord;
+                b.x = bx;
+                b.y = by;
+                b.type = type;
+                System.arraycopy(data, addr, b.raw, 0, 32);
+                mapData.buildings.add(b);
+            }
+        }
+    }
+
+    /** 把编辑后的 32 字节城市记录写回 BTL 对应偏移，并同步内存地块建筑。 */
+    public static void patchBuilding(MapData mapData, MapData.Building b, byte[] raw32)
+            throws IOException {
+        if (mapData == null || mapData.btlOriginalData == null || b == null
+                || raw32 == null || raw32.length < 32) {
+            throw new IOException("城市数据无效");
+        }
+        BtlHeaderInfo h = parseBTLHeader(mapData.btlOriginalData);
+        int addr = h.buildingStart + b.index * 32;
+        if (addr + 32 > mapData.btlOriginalData.length) {
+            throw new IOException("城市记录越界");
+        }
+        System.arraycopy(raw32, 0, mapData.btlOriginalData, addr, 32);
+        // 内存同步：旧地块清除建筑，新坐标地块写入新类型
+        int oldTile = b.y * mapData.width + b.x;
+        int coord = ByteBuffer.wrap(raw32).order(ByteOrder.LITTLE_ENDIAN)
+                .getShort(0) & 0xFFFF;
+        int type = raw32[4] & 0xFF;
+        int nx = coord % mapData.width;
+        int ny = coord / mapData.width;
+        int newTile = ny * mapData.width + nx;
+        if (oldTile >= 0 && oldTile < mapData.buildingIds.size() && oldTile != newTile) {
+            mapData.buildingIds.set(oldTile, 0);
+        }
+        if (newTile >= 0 && newTile < mapData.buildingIds.size()) {
+            mapData.buildingIds.set(newTile, type);
+        }
+        b.coord = coord;
+        b.x = nx;
+        b.y = ny;
+        b.type = type;
+        System.arraycopy(raw32, 0, b.raw, 0, 32);
+    }
+
+    /** 把编辑后的 48 字节兵种记录写回 BTL 对应偏移。 */
+    public static void patchArmy(MapData mapData, MapData.Army army, byte[] raw48) throws IOException {
+        if (mapData == null || mapData.btlOriginalData == null || army == null
+                || raw48 == null || raw48.length < 48) {
+            throw new IOException("兵种数据无效");
+        }
+        BtlHeaderInfo h = parseBTLHeader(mapData.btlOriginalData);
+        int armyStart = h.buildingStart + h.buildingCount * 32;
+        int recSize = armyRecSize(h.version);
+        if (raw48 == null || raw48.length < recSize) throw new IOException("兵种记录无效");
+        int addr = armyStart + army.index * recSize;
+        if (addr + recSize > mapData.btlOriginalData.length) throw new IOException("兵种记录越界");
+        System.arraycopy(raw48, 0, mapData.btlOriginalData, addr, recSize);
+    }
+
+    /**
+     * 在兵种段末尾新增一条 48 字节兵种记录（后续各段整体后移），更新兵种总数，
+     * 并把该地块的军团归属设为指定军团（单位无归属会导致游戏闪退）。
+     */
+    public static void addArmy(MapData mapData, int x, int y, int type, byte[] raw48, int legion) throws IOException {
+        if (mapData == null || mapData.btlOriginalData == null) {
+            throw new IOException("请先加载 BTL 地图");
+        }
+        if (x < 0 || y < 0 || x >= mapData.width || y >= mapData.height) {
+            throw new IOException("地块坐标越界");
+        }
+        if (raw48 == null || raw48.length < 48) {
+            throw new IOException("兵种记录无效");
+        }
+        byte[] oldBtl = mapData.btlOriginalData;
+        BtlHeaderInfo h = parseBTLHeader(oldBtl);
+        int armyStart = h.buildingStart + h.buildingCount * 32;
+        int recSize = armyRecSize(h.version);
+        if (raw48 == null || raw48.length < 48) {
+            throw new IOException("兵种记录无效");
+        }
+        byte[] rec = new byte[recSize];
+        System.arraycopy(raw48, 0, rec, 0, Math.min(raw48.length, recSize));
+        int armyBytes = h.armyCount * recSize;
+        if (armyStart + armyBytes > oldBtl.length) {
+            throw new IOException("兵种段越界");
+        }
+        byte[] result = new byte[oldBtl.length + recSize];
+        // 兵种段之前（含军团/地形/省规划/归属/建筑）
+        System.arraycopy(oldBtl, 0, result, 0, armyStart + armyBytes);
+        // 新增记录
+        System.arraycopy(rec, 0, result, armyStart + armyBytes, recSize);
+        // 兵种段之后整体后移
+        int rest = oldBtl.length - (armyStart + armyBytes);
+        if (rest > 0) {
+            System.arraycopy(oldBtl, armyStart + armyBytes, result, armyStart + armyBytes + recSize, rest);
+        }
+        ByteBuffer bb = ByteBuffer.wrap(result).order(ByteOrder.LITTLE_ENDIAN);
+        bb.putInt(0x20, h.armyCount + 1);
+        // 军团归属：地块归入指定军团（0xFF=中立；单位必须有归属）
+        int ownershipStart = h.buildingStart - h.width * h.height;
+        int tileIdx = y * mapData.width + x;
+        if (legion >= 0 && legion <= 0xFF && ownershipStart >= 0
+                && ownershipStart + tileIdx < result.length) {
+            result[ownershipStart + tileIdx] = (byte) legion;
+        }
+        if (mapData.belongs != null && tileIdx < mapData.belongs.length) {
+            mapData.belongs[tileIdx] = (byte) legion;
+        }
+        mapData.btlOriginalData = result;
+        refreshArmies(mapData);
+    }
+
+    /** 把编辑后的 300 字节军团记录写回 BTL。 */
+    public static void patchLegion(MapData mapData, MapData.Legion legion, byte[] raw300) throws IOException {
+        if (mapData == null || mapData.btlOriginalData == null || legion == null
+                || raw300 == null || raw300.length < 300) {
+            throw new IOException("军团数据无效");
+        }
+        int index = mapData.legions.indexOf(legion);
+        if (index < 0) throw new IOException("军团不存在");
+        int addr = 128 + index * 300;
+        if (addr + 300 > mapData.btlOriginalData.length) throw new IOException("军团记录越界");
+        System.arraycopy(raw300, 0, mapData.btlOriginalData, addr, 300);
+    }
+
+    /** 从当前 btlOriginalData 重新解析兵种与军团数据（扩展/裁剪后调用）。 */
+    public static void refreshArmies(MapData mapData) {
+        if (mapData == null || mapData.btlOriginalData == null) return;
+        parseContentSections(mapData, mapData.btlOriginalData, parseBTLHeader(mapData.btlOriginalData));
     }
 
     public static byte[] saveAsBTL(MapData mapData) throws IOException {
@@ -377,16 +594,18 @@ public class FileParser {
         int oldTotal = h.width * h.height;
         int cursor = base + h.buildingCount * 32;
 
-        remapSection(btl, cursor, h.armyCount, 48, 0, oldTotal, remap);
-        cursor += h.armyCount * 48;
+        int armyRec = armyRecSize(h.version);
+        int reinforceRec = reinforceRecSize(h.version);
+        remapSection(btl, cursor, h.armyCount, armyRec, 0, oldTotal, remap);
+        cursor += h.armyCount * armyRec;
         remapSection(btl, cursor, h.mineCount, 12, 0, oldTotal, remap);
         cursor += h.mineCount * 12;
         remapSection(btl, cursor, h.planCount, 16, 12, oldTotal, remap); // 方案：目标地块在 0xC
         cursor += h.planCount * 16;
         cursor += h.weatherCount * 16;  // 天气：无地块索引
         cursor += h.eventCount * 44;    // 事件：无地块索引
-        remapSection(btl, cursor, h.reinforceCount, 80, 0, oldTotal, remap);
-        cursor += h.reinforceCount * 80;
+        remapSection(btl, cursor, h.reinforceCount, reinforceRec, 0, oldTotal, remap);
+        cursor += h.reinforceCount * reinforceRec;
         remapSection(btl, cursor, h.airstrikeCount, 20, 0, oldTotal, remap);
         cursor += h.airstrikeCount * 20;
         // 放置单位（0x44+0x48 计数）8字节/条：坐标在 0x0
@@ -575,8 +794,10 @@ public class FileParser {
                     oldW, x1, y1, newW, newH, oldTotal, mapData, bCount);
             // 建筑之后各段
             int cursor = oldBuildingStart + oldBuildingBytes;
+            int armyRec = armyRecSize(h.version);
+            int reinforceRec = reinforceRecSize(h.version);
             int[] armyKept = {0};
-            cursor = cropCoordSection(out, oldBtl, cursor, h.armyCount, 48, 0,
+            cursor = cropCoordSection(out, oldBtl, cursor, h.armyCount, armyRec, 0,
                     oldW, x1, y1, newW, newH, oldTotal, false, armyKept);
             int[] mineKept = {0};
             cursor = cropCoordSection(out, oldBtl, cursor, h.mineCount, 12, 0,
@@ -587,7 +808,7 @@ public class FileParser {
             cursor = copySection(out, oldBtl, cursor, h.weatherCount, 16);
             cursor = copySection(out, oldBtl, cursor, h.eventCount, 44);
             int[] reinfKept = {0};
-            cursor = cropCoordSection(out, oldBtl, cursor, h.reinforceCount, 80, 0,
+            cursor = cropCoordSection(out, oldBtl, cursor, h.reinforceCount, reinforceRec, 0,
                     oldW, x1, y1, newW, newH, oldTotal, false, reinfKept);
             int[] airKept = {0};
             cursor = cropCoordSection(out, oldBtl, cursor, h.airstrikeCount, 20, 0,
@@ -635,6 +856,7 @@ public class FileParser {
             }
             mapData.binOriginalData = bin;
         }
+        refreshArmies(mapData);
         mapData.buildTerrainPatterns();
         return mapData;
     }

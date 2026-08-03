@@ -15,6 +15,56 @@ public class MapData {
     public java.util.Map<Integer, byte[]> terrainPatterns = new java.util.HashMap<>();
     /** 每种地形组在本图中出现过的常见完整 16 字节模式列表（随机地形从中挑选合法变体）。 */
     public java.util.Map<Integer, java.util.List<byte[]>> terrainPatternList = new java.util.HashMap<>();
+    /** 地图上的兵种（从 BTL 兵种段 48 字节/条解析）。 */
+    public java.util.List<Army> armies = new java.util.ArrayList<>();
+    /** 军团地块颜色（军团段 0x28 处 RGBA），按军团顺序。 */
+    public int[] legionColors = new int[0];
+    /** 军团所属国家 ID（军团段 0x4），按军团顺序。 */
+    public int[] legionCountries = new int[0];
+    /** 军团归属（1字节/格：0xFF=中立，否则为军团索引）。 */
+    public byte[] belongs = new byte[0];
+    /** 军团 300 字节记录列表。 */
+    public java.util.List<Legion> legions = new java.util.ArrayList<>();
+    /** 省规划（2字节/格）。 */
+    public int[] provinces = new int[0];
+    /** 城市/建筑记录列表（建筑段 32 字节/条，按文件顺序）。 */
+    public java.util.List<Building> buildings = new java.util.ArrayList<>();
+
+    /** 建筑记录（32 字节：0x0 坐标、0x2 名称、0x4 类型、0x5 外观等）。 */
+    public static class Building {
+        public int index;   // 在建筑段中的序号（用于写回）
+        public int x, y;    // 当前坐标
+        public int coord;   // 0x0 地块坐标（tile index）
+        public int type;    // 0x4 建筑类型（对应 building_N.png）
+        public byte[] raw = new byte[32];
+    }
+
+    /** BTL 兵种记录（48 字节/条：0x0 坐标、0x2 兵种、0x3 等级）。 */
+    public static class Army {
+        public int x, y;
+        public int type;   // 兵种代码（ArmySettings 的 Army 字段）
+        public int level;  // 等级
+        public String name;
+        public int index;          // 在兵种段中的序号（用于写回）
+        public byte[] raw;         // 原始记录（版本1=48字节，版本2/3=64字节）
+
+        public Army(int x, int y, int type, int level) {
+            this.x = x;
+            this.y = y;
+            this.type = type;
+            this.level = level;
+        }
+    }
+
+    /** 军团记录（300 字节：0x0 序号、0x4 国家、0x14 控制、0x18 阵营、0x28 地块颜色等）。 */
+    public static class Legion {
+        public byte[] raw = new byte[300];
+        public int seq;
+        public int country;
+        public int faction;
+        public int control;
+        public int color;
+    }
     // 多选相关
     public java.util.Set<Integer> selectedBlocks = new java.util.HashSet<>();
     public boolean multiSelectMode = false;

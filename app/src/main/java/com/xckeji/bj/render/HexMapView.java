@@ -28,6 +28,15 @@ public class HexMapView extends View {
     private float offsetX = 20, offsetY = 20;
     private float scale = 1.0f;
     private int selectedX = -1, selectedY = -1;
+    // 截取框选区域（-1 表示未框选）
+    private int cropRx1 = -1, cropRy1 = -1, cropRx2 = -1, cropRy2 = -1;
+    // 省规划视图：按省规划值给每个省不同的颜色（需手动开启）
+    private boolean provinceView = false;
+    // 国家颜色半透明覆盖（默认开启）：在地形上叠一层归属颜色，不遮挡地形
+    private boolean ownershipTint = true;
+    // 省规划视图：每个地块所在省份解析后的归属军团（0xFF=无归属），
+    // 优先取 军团归属[省规划坐标]，失联/中立时用该省城市的军团归属兜底
+    private int[] provinceOwnerLegion;
     private OnTileSelectListener listener;
     private GestureDetector gestureDetector;
     private Paint tilePaint, gridPaint, selectedPaint;
@@ -44,6 +53,8 @@ public class HexMapView extends View {
     private Bitmap landBmp;
     private Bitmap seaBmp;
     private Map<String, Bitmap> terrainBmps;
+    private Map<Integer, Bitmap> legionBmps;
+    private Map<Integer, Bitmap> flagBmps;
     private Map<Integer, Bitmap> buildingBmps;
     private boolean imagesLoaded = false;
     private Bitmap borderSelectedBmp;
@@ -88,9 +99,19 @@ public class HexMapView extends View {
         imagesLoaded = true;
         try {
             terrainBmps = new HashMap<>();
+            legionBmps = new HashMap<>();
+            flagBmps = new HashMap<>();
             buildingBmps = new HashMap<>();
             landBmp = load("map/land.png");
             seaBmp = load("map/sea.png");
+            for (int i = 1; i <= 38; i++) {
+                Bitmap b = load("legion/legion_icon_" + i + ".png");
+                if (b != null) legionBmps.put(i, b);
+            }
+            for (int i = 1; i <= 49; i++) {
+                Bitmap b = load("flag/flag_" + i + ".png");
+                if (b != null) flagBmps.put(i, b);
+            }
             borderSelectedBmp = BitmapFactory.decodeResource(getResources(), R.drawable.border_selected);
             for (int i = 0; i < IGS.length; i++) {
                 int g = IGS[i]; String base = G2B.get(g);
@@ -116,7 +137,9 @@ public class HexMapView extends View {
 
     public void setMapData(MapData data) {
         mapData = data; selectedX = -1; selectedY = -1; scale = 1f;
+        clearCropRect();
         hexTileCache.clear(); cachedHexSize = -1f;
+        rebuildProvinceOwner();
         post(() -> { centerMap(); invalidate(); });
     }
     public MapData getMapData() { return mapData; }
@@ -124,7 +147,80 @@ public class HexMapView extends View {
     public void setOnTileSelectListener(OnTileSelectListener l) { listener = l; }
     public int getSelectedX() { return selectedX; }
     public int getSelectedY() { return selectedY; }
-    public void refresh() { invalidate(); }
+    public void refresh() {
+        rebuildProvinceOwner();
+        invalidate();
+    }
+
+    /**
+     * 重建省规划归属表：省份归属 = 军团归属[省规划坐标]；
+     * 若该坐标已失联（裁剪/扩展后越界）或归属为中立，
+     * 则用该省内城市（建筑/39兵种）所在格的军团归属作为省份颜色来源。
+     */
+    private void rebuildProvinceOwner() {
+        provinceOwnerLegion = null;
+        if (mapData == null || mapData.provinces == null) return;
+        int n = mapData.getTotalTiles();
+        int w = mapData.width;
+        int[] prov = mapData.provinces;
+        byte[] belongs = mapData.belongs;
+        int lc = mapData.legionColors.length;
+        if (belongs == null || lc == 0) return;
+        Map<Integer, Integer> owner = new HashMap<>();
+        for (int i = 0; i < n; i++) {
+            int pv = prov[i];
+            if (pv == 0 || pv == 0xFFFF || pv >= n || pv >= belongs.length) continue;
+            int leg = belongs[pv] & 0xFF;
+            if (leg != 0xFF && leg < lc && !owner.containsKey(pv)) {
+                owner.put(pv, leg);
+            }
+        }
+        // 收集兵种段里的城市（type=39）坐标
+        java.util.Set<Integer> cityIdxs = null;
+        if (mapData.armies != null) {
+            for (MapData.Army a : mapData.armies) {
+                if (a.type == 39) {
+                    int ai = a.y * w + a.x;
+                    if (ai >= 0 && ai < n) {
+                        if (cityIdxs == null) cityIdxs = new java.util.HashSet<>();
+                        cityIdxs.add(ai);
+                    }
+                }
+            }
+        }
+        // 城市兜底：省份归属失联/中立时，用该省城市所在格的军团归属
+        for (int i = 0; i < n; i++) {
+            int pv = prov[i];
+            if (pv == 0 || pv == 0xFFFF) continue;
+            if (owner.containsKey(pv)) continue;
+            boolean isCity = mapData.getBuildingId(i % w, i / w) > 0
+                    || (cityIdxs != null && cityIdxs.contains(i));
+            if (!isCity) continue;
+            int leg = belongs[i] & 0xFF;
+            if (leg != 0xFF && leg < lc) owner.put(pv, leg);
+        }
+        provinceOwnerLegion = new int[n];
+        for (int i = 0; i < n; i++) {
+            Integer leg = owner.get(prov[i]);
+            provinceOwnerLegion[i] = leg != null ? leg : 0xFF;
+        }
+    }
+
+    public void setCropRect(int x1, int y1, int x2, int y2) {
+        cropRx1 = Math.min(x1, x2);
+        cropRy1 = Math.min(y1, y2);
+        cropRx2 = Math.max(x1, x2);
+        cropRy2 = Math.max(y1, y2);
+    }
+
+    public void clearCropRect() {
+        cropRx1 = cropRy1 = cropRx2 = cropRy2 = -1;
+    }
+
+    public void setProvinceView(boolean v) {
+        provinceView = v;
+        invalidate();
+    }
 
     /** 把整张地图按基准比例渲染成一张 PNG 位图（用于导出/截图分享）。 */
     public Bitmap renderFullMap() {
@@ -256,6 +352,13 @@ public class HexMapView extends View {
         sharedPath.close();
     }
 
+    /** 按省规划值生成稳定的颜色（0/0xFFFF=中性浅灰）。 */
+    private int provinceColor(int pv) {
+        if (pv == 0 || pv == 0xFFFF) return 0xFFe8ecef;
+        float hue = (pv * 137.508f) % 360f;
+        return android.graphics.Color.HSVToColor(new float[]{hue, 0.45f, 0.92f});
+    }
+
     /**
      * 获取 (gid,tid) 的六边形贴图缓存：底色+贴图一次性 clip 到六边形，
      * 之后每帧只需一次 drawBitmap，不再逐格 clipPath。
@@ -381,11 +484,19 @@ public class HexMapView extends View {
 
                 // 1. 底色
                 buildHexPath(px, py);
-                tilePaint.setColor(baseColor);
-                canvas.drawPath(sharedPath, tilePaint);
+                if (provinceView) {
+                    // 省规划视图：每个省按省规划值生成不同颜色，便于区分省份
+                    int pv = (mapData.provinces != null && cellIdx < mapData.provinces.length)
+                            ? mapData.provinces[cellIdx] : 0;
+                    tilePaint.setColor(provinceColor(pv));
+                    canvas.drawPath(sharedPath, tilePaint);
+                } else {
+                    tilePaint.setColor(baseColor);
+                    canvas.drawPath(sharedPath, tilePaint);
+                }
 
                 // 2. clip + 贴图（采样色格子不画贴图，只显示纯色）
-                if (useSampled) {
+                if (provinceView || useSampled) {
                     // 不画贴图
                 } else {
                     canvas.save();
@@ -412,6 +523,16 @@ public class HexMapView extends View {
                         }
                     }
                     canvas.restore();
+                }
+
+                // 2.5 国家/省份归属半透明覆盖：默认开启，只叠色不遮挡地形
+                if (!provinceView && ownershipTint) {
+                    int leg = (provinceOwnerLegion != null && cellIdx < provinceOwnerLegion.length)
+                            ? provinceOwnerLegion[cellIdx] : 0xFF;
+                    if (leg != 0xFF && leg >= 0 && leg < mapData.legionColors.length) {
+                        tilePaint.setColor((mapData.legionColors[leg] & 0x00FFFFFF) | 0x59000000);
+                        canvas.drawPath(sharedPath, tilePaint);
+                    }
                 }
 
                 // 3. 网格
@@ -472,6 +593,101 @@ public class HexMapView extends View {
                         canvas.restore();
                     }
                 }
+            }
+        }
+
+        // 兵种标记（覆盖在建筑之上）：军团色圆标 + 等级 + 名称
+        if (mapData.armies != null) {
+            for (MapData.Army a : mapData.armies) {
+                if (a == null) continue;
+                float px = hcx(a.x), py = hcy(a.x, a.y), s = hs();
+                if (px + s < 0 || px - s > getWidth() || py + s < 0 || py - s > getHeight()) continue;
+                int idx = a.y * mapData.width + a.x;
+                int legion = (mapData.belongs != null && idx >= 0 && idx < mapData.belongs.length)
+                        ? (mapData.belongs[idx] & 0xFF) : 0xFF;
+                int color = 0xFF374151;
+                if (legion != 0xFF && legion >= 0 && legion < mapData.legionColors.length) {
+                    color = mapData.legionColors[legion];
+                }
+                // 图标按兵种代码对应 legion_icon_N.png；兵种39=城市，用城市建筑图标
+                Bitmap legionIcon = null;
+                if (a.type == 39) {
+                    if (buildingBmps != null) {
+                        legionIcon = buildingBmps.get(13);
+                        if (legionIcon == null) legionIcon = buildingBmps.get(11);
+                    }
+                } else if (legionBmps != null) {
+                    legionIcon = legionBmps.get(a.type);
+                }
+                float r = Math.max(4f, s * 0.38f);
+                float iconSize = Math.max(10f, s * 1.3f);
+                if (legionIcon != null) {
+                    canvas.drawBitmap(legionIcon, null,
+                            new RectF(px - iconSize / 2f, py - iconSize / 2f,
+                                    px + iconSize / 2f, py + iconSize / 2f), bitmapPaint);
+                } else {
+                    // 无军团图标时回退为军团色圆
+                    Paint unitPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+                    unitPaint.setColor(color);
+                    canvas.drawCircle(px, py, r, unitPaint);
+                    unitPaint.setStyle(Paint.Style.STROKE);
+                    unitPaint.setStrokeWidth(Math.max(1f, s * 0.08f));
+                    unitPaint.setColor(0xFFFFFFFF);
+                    canvas.drawCircle(px, py, r, unitPaint);
+                }
+                // 国旗（部队国籍）：军团归属 -> 国家ID -> flag_N.png，画在图标上方
+                if (legion != 0xFF && legion >= 0 && mapData.legionCountries != null
+                        && legion < mapData.legionCountries.length && flagBmps != null) {
+                    Bitmap flag = flagBmps.get(mapData.legionCountries[legion]);
+                    if (flag != null) {
+                        float fw = iconSize * 0.95f;
+                        float fh = fw * flag.getHeight() / (float) flag.getWidth();
+                        canvas.drawBitmap(flag, null,
+                                new RectF(px - fw / 2f, py - iconSize / 2f - fh,
+                                        px + fw / 2f, py - iconSize / 2f), bitmapPaint);
+                    }
+                }
+                // 等级角标（图标右下角）
+                if (s >= 6) {
+                    float br = Math.max(5f, s * 0.24f);
+                    float badgeX = px + iconSize / 2f - br * 0.35f;
+                    float badgeY = py + iconSize / 2f - br * 0.35f;
+                    Paint bgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+                    bgPaint.setColor(0xD9000000);
+                    canvas.drawCircle(badgeX, badgeY, br, bgPaint);
+                    Paint numPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+                    numPaint.setColor(0xFFFFFFFF);
+                    numPaint.setTextSize(br * 1.15f);
+                    numPaint.setTextAlign(Paint.Align.CENTER);
+                    numPaint.setFakeBoldText(true);
+                    canvas.drawText(String.valueOf(a.level), badgeX,
+                            badgeY + numPaint.getTextSize() * 0.36f, numPaint);
+                }
+            }
+        }
+
+        // 截取框选高亮（半透明绿框）
+        if (cropRx1 >= 0 && mapData != null) {
+            float s = hs();
+            float minX = Float.MAX_VALUE, minY = Float.MAX_VALUE;
+            float maxX = -Float.MAX_VALUE, maxY = -Float.MAX_VALUE;
+            for (int yy = cropRy1; yy <= cropRy2; yy++) {
+                for (int xx = cropRx1; xx <= cropRx2; xx++) {
+                    float px = hcx(xx), py = hcy(xx, yy);
+                    minX = Math.min(minX, px - s);
+                    maxX = Math.max(maxX, px + s);
+                    minY = Math.min(minY, py - s);
+                    maxY = Math.max(maxY, py + s);
+                }
+            }
+            if (maxX > minX && maxY > minY) {
+                Paint cropPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+                cropPaint.setColor(0x3310b981);
+                canvas.drawRect(minX, minY, maxX, maxY, cropPaint);
+                cropPaint.setStyle(Paint.Style.STROKE);
+                cropPaint.setStrokeWidth(3f);
+                cropPaint.setColor(0xFF10b981);
+                canvas.drawRect(minX, minY, maxX, maxY, cropPaint);
             }
         }
 
