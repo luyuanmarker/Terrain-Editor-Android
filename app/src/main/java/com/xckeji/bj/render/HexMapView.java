@@ -34,6 +34,8 @@ public class HexMapView extends View {
     private boolean provinceView = false;
     // 国家颜色半透明覆盖（默认开启）：在地形上叠一层归属颜色，不遮挡地形
     private boolean ownershipTint = true;
+    // 纯移动模式：只允许拖动/缩放画面，点击不选中、不编辑
+    private boolean viewOnly = false;
     // 省规划视图：每个地块所在省份解析后的归属军团（0xFF=无归属），
     // 优先取 军团归属[省规划坐标]，失联/中立时用该省城市的军团归属兜底
     private int[] provinceOwnerLegion;
@@ -48,6 +50,10 @@ public class HexMapView extends View {
     // 六边形贴图缓存：每个 (地形组,ID) 预渲染一次，避免每帧 clipPath
     private final Map<String, Bitmap> hexTileCache = new HashMap<>();
     private float cachedHexSize = -1f;
+    // 整图缓存：整张地图都可见时，把地形/贴图/国家色/建筑渲染成一张离屏位图，
+    // 之后每帧只 drawBitmap 一次，避免大地图每帧逐格重绘导致卡顿掉帧。
+    private Bitmap fullMapCache;
+    private boolean fullMapDirty = true;
 
     // 图片——懒加载，首次绘制时初始化
     private Bitmap landBmp;
@@ -139,6 +145,7 @@ public class HexMapView extends View {
         mapData = data; selectedX = -1; selectedY = -1; scale = 1f;
         clearCropRect();
         hexTileCache.clear(); cachedHexSize = -1f;
+        fullMapDirty = true;
         rebuildProvinceOwner();
         post(() -> { centerMap(); invalidate(); });
     }
@@ -148,6 +155,7 @@ public class HexMapView extends View {
     public int getSelectedX() { return selectedX; }
     public int getSelectedY() { return selectedY; }
     public void refresh() {
+        fullMapDirty = true;
         rebuildProvinceOwner();
         invalidate();
     }
@@ -219,8 +227,15 @@ public class HexMapView extends View {
 
     public void setProvinceView(boolean v) {
         provinceView = v;
+        fullMapDirty = true;
         invalidate();
     }
+
+    public void setViewOnly(boolean v) {
+        viewOnly = v;
+        invalidate();
+    }
+    public boolean isViewOnly() { return viewOnly; }
 
     /** 把整张地图按基准比例渲染成一张 PNG 位图（用于导出/截图分享）。 */
     public Bitmap renderFullMap() {
@@ -265,12 +280,318 @@ public class HexMapView extends View {
         }
     }
 
+    /** 整张地图是否完全落在视口内（此时可用整图位图缓存，一帧一次 drawBitmap）。 */
+    private boolean mapFitsViewport() {
+        if (mapData == null || getWidth() <= 0 || getHeight() <= 0) return false;
+        float s = hs();
+        float W = s * 1.5f * mapData.width + s;
+        float H = s * (float) Math.sqrt(3) * (mapData.height + 0.5f);
+        return W <= getWidth() && H <= getHeight();
+    }
+
+    /** 把整张地图（底色/贴图/国家色/建筑）一次性渲染进离屏位图。 */
+    private void rebuildFullMap() {
+        fullMapCache = null;
+        if (mapData == null || getWidth() <= 0 || getHeight() <= 0) return;
+        float oldScale = scale;
+        float oldOx = offsetX, oldOy = offsetY;
+        scale = 1f;
+        offsetX = 0;
+        offsetY = 0;
+        hexTileCache.clear();
+        cachedHexSize = -1f;
+        try {
+            float s = hs();
+            int W = (int) Math.ceil(s * 1.5f * mapData.width + s);
+            int H = (int) Math.ceil(s * (float) Math.sqrt(3) * (mapData.height + 0.5f));
+            if (W <= 0 || H <= 0) return;
+            fullMapCache = Bitmap.createBitmap(Math.max(W, 1), Math.max(H, 1), Bitmap.Config.ARGB_8888);
+            Canvas c = new Canvas(fullMapCache);
+            c.drawColor(0xFFe8ecef);
+            boolean drawGrid = s >= 3f;
+            for (int y = 0; y < mapData.height; y++) {
+                for (int x = 0; x < mapData.width; x++) {
+                    TerrainTile tile = mapData.getTile(x, y);
+                    if (tile == null) continue;
+                    float px = hcx(x), py = hcy(x, y);
+                    int gid = tile.bmTerrain1Group;
+                    int tid = tile.bmTerrain1Id;
+                    if (tid == 0) tid = 1;
+                    int cellIdx = y * mapData.width + x;
+                    buildHexPath(px, py);
+                    boolean useSampled = overlayVisible && mapData.sampledColors != null
+                            && cellIdx < mapData.sampledColors.size()
+                            && mapData.sampledColors.get(cellIdx) != 0
+                            && !mapData.editedCells.contains(cellIdx);
+                    int baseColor = useSampled ? mapData.sampledColors.get(cellIdx) : tile.getTerrainColor();
+                    // 默认直接用地块归属色实心填充（法国地块就是蓝），不再叠半透明滤镜
+                    int terrLeg = (ownershipTint && provinceOwnerLegion != null
+                            && cellIdx < provinceOwnerLegion.length)
+                            ? provinceOwnerLegion[cellIdx] : 0xFF;
+                    boolean solidCountry = !provinceView && ownershipTint
+                            && terrLeg != 0xFF && terrLeg >= 0
+                            && terrLeg < mapData.legionColors.length;
+                    if (provinceView) {
+                        int pv = (mapData.provinces != null && cellIdx < mapData.provinces.length)
+                                ? mapData.provinces[cellIdx] : 0;
+                        tilePaint.setColor(provinceColor(pv));
+                        c.drawPath(sharedPath, tilePaint);
+                    } else if (solidCountry) {
+                        tilePaint.setColor(mapData.legionColors[terrLeg]);
+                        c.drawPath(sharedPath, tilePaint);
+                    } else {
+                        tilePaint.setColor(baseColor);
+                        c.drawPath(sharedPath, tilePaint);
+                    }
+                    if (provinceView || solidCountry || useSampled) {
+                        // 不画贴图
+                    } else {
+                        c.save();
+                        c.clipPath(sharedPath);
+                        float hh = s;
+                        Rect dst = new Rect((int) (px - hh), (int) (py - hh),
+                                (int) (px + hh), (int) (py + hh));
+                        if (gid == 0 && landBmp != null) {
+                            c.drawBitmap(landBmp, null, dst, bitmapPaint);
+                        } else if (gid == 1 && seaBmp != null) {
+                            c.drawBitmap(seaBmp, null, dst, bitmapPaint);
+                        } else {
+                            if (landBmp != null) c.drawBitmap(landBmp, null, dst, bitmapPaint);
+                            String base = G2B.get(gid);
+                            if (base != null && terrainBmps != null) {
+                                Bitmap bmp = terrainBmps.get(gid + "_" + tid);
+                                if (bmp == null && tid > 1) bmp = terrainBmps.get(gid + "_1");
+                                if (bmp != null) c.drawBitmap(bmp, null, dst, bitmapPaint);
+                            }
+                        }
+                        c.restore();
+                    }
+                    int bid = mapData.getBuildingId(x, y);
+                    if (bid > 0 && buildingBmps != null) {
+                        Bitmap bb = buildingBmps.get(bid);
+                        if (bb != null) {
+                            c.save();
+                            c.clipPath(sharedPath);
+                            c.drawBitmap(bb, null,
+                                    new Rect((int) (px - s), (int) (py - s),
+                                            (int) (px + s), (int) (py + s)), tilePaint);
+                            c.restore();
+                        }
+                    }
+                    if (drawGrid) {
+                        gridPaint.setStrokeWidth(Math.max(0.5f, 0.8f));
+                        c.drawPath(sharedPath, gridPaint);
+                    }
+                }
+            }
+        } catch (OutOfMemoryError oom) {
+            fullMapCache = null; // 超大图内存不足时退回逐格绘制
+            fullMapDirty = false; // 避免每帧反复尝试分配
+        } finally {
+            scale = oldScale;
+            offsetX = oldOx;
+            offsetY = oldOy;
+            hexTileCache.clear();
+            cachedHexSize = -1f;
+        }
+    }
+
+    /** 动态覆盖层：兵种标记、截取框、图填引导图（整图缓存模式下也每帧绘制）。 */
+    private void drawDynamicOverlays(Canvas canvas) {
+        drawArmyMarkers(canvas);
+        drawCropRect(canvas);
+        drawGuideImage(canvas);
+    }
+
+    /** 选中/多选高亮/笔刷光标（整图缓存模式下单独绘制）。 */
+    private void drawSelectionOverlays(Canvas canvas) {
+        if (mapData == null) return;
+        float s = hs();
+        if (mapData.multiSelectMode && mapData.selectedBlocks != null) {
+            for (int idx : mapData.selectedBlocks) {
+                int x = idx % mapData.width, y = idx / mapData.width;
+                float px = hcx(x), py = hcy(x, y);
+                if (px + s < 0 || px - s > getWidth() || py + s < 0 || py - s > getHeight()) continue;
+                buildHexPath(px, py);
+                canvas.drawPath(sharedPath, multiPaint);
+            }
+        }
+        if (selectedX >= 0 && selectedY >= 0) {
+            float px = hcx(selectedX), py = hcy(selectedX, selectedY);
+            if (px + s >= 0 && px - s <= getWidth() && py + s >= 0 && py - s <= getHeight()) {
+                buildHexPath(px, py);
+                if (borderSelectedBmp != null) {
+                    canvas.save();
+                    canvas.clipPath(sharedPath);
+                    RectF bounds = new RectF();
+                    sharedPath.computeBounds(bounds, true);
+                    float scaleFactor = Math.max(bounds.width() / borderSelectedBmp.getWidth(),
+                            bounds.height() / borderSelectedBmp.getHeight());
+                    float drawW = borderSelectedBmp.getWidth() * scaleFactor;
+                    float drawH = borderSelectedBmp.getHeight() * scaleFactor;
+                    canvas.drawBitmap(borderSelectedBmp, null,
+                            new RectF(bounds.centerX() - drawW / 2f, bounds.centerY() - drawH / 2f,
+                                    bounds.centerX() + drawW / 2f, bounds.centerY() + drawH / 2f),
+                            bitmapPaint);
+                    canvas.restore();
+                } else {
+                    canvas.drawPath(sharedPath, selectedPaint);
+                }
+                if (mapData.brushMode) {
+                    Paint brushCursor = new Paint(Paint.ANTI_ALIAS_FLAG);
+                    brushCursor.setStyle(Paint.Style.STROKE);
+                    brushCursor.setStrokeWidth(2f);
+                    brushCursor.setColor(0xFF22c55e);
+                    float brushRadius = s * (0.6f + mapData.brushRadius * 0.9f);
+                    canvas.drawCircle(px, py, brushRadius, brushCursor);
+                }
+            }
+        }
+    }
+
+    /** 兵种标记（军团色圆标/图标 + 国旗 + 等级角标）。 */
+    private void drawArmyMarkers(Canvas canvas) {
+        if (mapData.armies == null) return;
+        for (MapData.Army a : mapData.armies) {
+            if (a == null) continue;
+            float px = hcx(a.x), py = hcy(a.x, a.y), s = hs();
+            if (px + s < 0 || px - s > getWidth() || py + s < 0 || py - s > getHeight()) continue;
+            int idx = a.y * mapData.width + a.x;
+            int legion = (mapData.belongs != null && idx >= 0 && idx < mapData.belongs.length)
+                    ? (mapData.belongs[idx] & 0xFF) : 0xFF;
+            int color = 0xFF374151;
+            if (legion != 0xFF && legion >= 0 && legion < mapData.legionColors.length) {
+                color = mapData.legionColors[legion];
+            }
+            Bitmap legionIcon = null;
+            if (a.type == 39) {
+                if (buildingBmps != null) {
+                    legionIcon = buildingBmps.get(13);
+                    if (legionIcon == null) legionIcon = buildingBmps.get(11);
+                }
+            } else if (legionBmps != null) {
+                legionIcon = legionBmps.get(a.type);
+            }
+            float r = Math.max(4f, s * 0.38f);
+            float iconSize = Math.max(10f, s * 1.3f);
+            if (legionIcon != null) {
+                canvas.drawBitmap(legionIcon, null,
+                        new RectF(px - iconSize / 2f, py - iconSize / 2f,
+                                px + iconSize / 2f, py + iconSize / 2f), bitmapPaint);
+            } else {
+                Paint unitPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+                unitPaint.setColor(color);
+                canvas.drawCircle(px, py, r, unitPaint);
+                unitPaint.setStyle(Paint.Style.STROKE);
+                unitPaint.setStrokeWidth(Math.max(1f, s * 0.08f));
+                unitPaint.setColor(0xFFFFFFFF);
+                canvas.drawCircle(px, py, r, unitPaint);
+            }
+            if (legion != 0xFF && legion >= 0 && mapData.legionCountries != null
+                    && legion < mapData.legionCountries.length && flagBmps != null) {
+                Bitmap flag = flagBmps.get(mapData.legionCountries[legion]);
+                if (flag != null) {
+                    float fw = iconSize * 0.95f;
+                    float fh = fw * flag.getHeight() / (float) flag.getWidth();
+                    canvas.drawBitmap(flag, null,
+                            new RectF(px - fw / 2f, py - iconSize / 2f - fh,
+                                    px + fw / 2f, py - iconSize / 2f), bitmapPaint);
+                }
+            }
+            if (s >= 6) {
+                float br = Math.max(5f, s * 0.24f);
+                float badgeX = px + iconSize / 2f - br * 0.35f;
+                float badgeY = py + iconSize / 2f - br * 0.35f;
+                Paint bgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+                bgPaint.setColor(0xD9000000);
+                canvas.drawCircle(badgeX, badgeY, br, bgPaint);
+                Paint numPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+                numPaint.setColor(0xFFFFFFFF);
+                numPaint.setTextSize(br * 1.15f);
+                numPaint.setTextAlign(Paint.Align.CENTER);
+                numPaint.setFakeBoldText(true);
+                canvas.drawText(String.valueOf(a.level), badgeX,
+                        badgeY + numPaint.getTextSize() * 0.36f, numPaint);
+            }
+        }
+    }
+
+    /** 截取框选高亮（半透明绿框）。 */
+    private void drawCropRect(Canvas canvas) {
+        if (cropRx1 < 0 || mapData == null) return;
+        float s = hs();
+        float minX = Float.MAX_VALUE, minY = Float.MAX_VALUE;
+        float maxX = -Float.MAX_VALUE, maxY = -Float.MAX_VALUE;
+        for (int yy = cropRy1; yy <= cropRy2; yy++) {
+            for (int xx = cropRx1; xx <= cropRx2; xx++) {
+                float px = hcx(xx), py = hcy(xx, yy);
+                minX = Math.min(minX, px - s);
+                maxX = Math.max(maxX, px + s);
+                minY = Math.min(minY, py - s);
+                maxY = Math.max(maxY, py + s);
+            }
+        }
+        if (maxX > minX && maxY > minY) {
+            Paint cropPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+            cropPaint.setColor(0x3310b981);
+            canvas.drawRect(minX, minY, maxX, maxY, cropPaint);
+            cropPaint.setStyle(Paint.Style.STROKE);
+            cropPaint.setStrokeWidth(3f);
+            cropPaint.setColor(0xFF10b981);
+            canvas.drawRect(minX, minY, maxX, maxY, cropPaint);
+        }
+    }
+
+    /** 图填引导图：原图 + 黑色六边形网格，已编辑格挖空。 */
+    private void drawGuideImage(Canvas canvas) {
+        if (!guideVisible || guideImage == null || mapData == null) return;
+        Paint guidePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        guidePaint.setAlpha(120);
+        float s = hs();
+        float minX = Float.MAX_VALUE, minY = Float.MAX_VALUE;
+        float maxX = Float.MIN_VALUE, maxY = Float.MIN_VALUE;
+        for (int yy = 0; yy < mapData.height; yy++) {
+            for (int xx = 0; xx < mapData.width; xx++) {
+                float px = hcx(xx), py = hcy(xx, yy);
+                if (px - s < minX) minX = px - s;
+                if (py - s < minY) minY = py - s;
+                if (px + s > maxX) maxX = px + s;
+                if (py + s > maxY) maxY = py + s;
+            }
+        }
+        canvas.save();
+        canvas.clipRect(minX, minY, maxX, maxY);
+        for (int yy = 0; yy < mapData.height; yy++) {
+            for (int xx = 0; xx < mapData.width; xx++) {
+                int cellIdx = yy * mapData.width + xx;
+                if (mapData.editedCells.contains(cellIdx)) {
+                    Path hexPath = hp(hcx(xx), hcy(xx, yy));
+                    canvas.clipOutPath(hexPath);
+                }
+            }
+        }
+        canvas.drawBitmap(guideImage, null,
+                new RectF(minX, minY, maxX, maxY), guidePaint);
+        Paint gridP = new Paint(Paint.ANTI_ALIAS_FLAG);
+        gridP.setStyle(Paint.Style.STROKE);
+        gridP.setStrokeWidth(Math.max(1.5f, scale * 1.5f));
+        gridP.setColor(0xFF000000);
+        for (int yy = 0; yy < mapData.height; yy++) {
+            for (int xx = 0; xx < mapData.width; xx++) {
+                float px = hcx(xx), py = hcy(xx, yy);
+                canvas.drawPath(hp(px, py), gridP);
+            }
+        }
+        canvas.restore();
+    }
+
     /** 设置底图（自适应铺满地图区域） */
     /** 设置底图并自动采样每个六边形中心颜色 */
     private boolean overlayVisible = true;
     public boolean isOverlayVisible() { return overlayVisible; }
     public void setOverlayVisible(boolean v) {
         overlayVisible = v;
+        fullMapDirty = true;
         invalidate();
     }
 
@@ -463,8 +784,35 @@ public class HexMapView extends View {
                 new RectF(minX, minY, maxX, maxY), overlayPaint);
         }
 
-        for (int y = 0; y < mapData.height; y++) {
-            for (int x = 0; x < mapData.width; x++) {
+        // 整图可见：用离屏位图缓存，一帧只 drawBitmap 一次，大地图不再逐格重绘
+        if (mapFitsViewport()) {
+            if (fullMapCache == null || fullMapDirty) {
+                rebuildFullMap();
+                fullMapDirty = false;
+            }
+            if (fullMapCache != null) {
+                float s = hs();
+                float W = s * 1.5f * mapData.width + s;
+                float H = s * (float) Math.sqrt(3) * (mapData.height + 0.5f);
+                canvas.drawBitmap(fullMapCache, null,
+                        new RectF(offsetX - s, offsetY - s, offsetX - s + W, offsetY - s + H),
+                        bitmapPaint);
+                drawSelectionOverlays(canvas);
+                drawDynamicOverlays(canvas);
+                return;
+            }
+        }
+
+        // 可见范围裁剪：只遍历视口内的格子，大地图放大时不遍历整图
+        float vs = hs();
+        int vx0 = Math.max(0, (int) ((offsetX - vs * 2f) / (1.5f * vs)) - 1);
+        int vx1 = Math.min(mapData.width - 1,
+                (int) ((getWidth() - offsetX + vs * 2f) / (1.5f * vs)) + 1);
+        int vy0 = Math.max(0, (int) ((offsetY - vs * 2f) / (vs * (float) Math.sqrt(3))) - 2);
+        int vy1 = Math.min(mapData.height - 1,
+                (int) ((getHeight() - offsetY + vs * 2f) / (vs * (float) Math.sqrt(3))) + 2);
+        for (int y = vy0; y <= vy1; y++) {
+            for (int x = vx0; x <= vx1; x++) {
                 TerrainTile tile = mapData.getTile(x, y);
                 if (tile == null) continue;
 
@@ -482,21 +830,30 @@ public class HexMapView extends View {
                     && !mapData.editedCells.contains(cellIdx);
                 int baseColor = useSampled ? mapData.sampledColors.get(cellIdx) : tile.getTerrainColor();
 
-                // 1. 底色
+                // 1. 底色：默认直接用地块归属色实心填充（法国地块就是蓝），不再叠半透明滤镜
                 buildHexPath(px, py);
+                int terrLeg = (ownershipTint && provinceOwnerLegion != null
+                        && cellIdx < provinceOwnerLegion.length)
+                        ? provinceOwnerLegion[cellIdx] : 0xFF;
+                boolean solidCountry = !provinceView && ownershipTint
+                        && terrLeg != 0xFF && terrLeg >= 0
+                        && terrLeg < mapData.legionColors.length;
                 if (provinceView) {
                     // 省规划视图：每个省按省规划值生成不同颜色，便于区分省份
                     int pv = (mapData.provinces != null && cellIdx < mapData.provinces.length)
                             ? mapData.provinces[cellIdx] : 0;
                     tilePaint.setColor(provinceColor(pv));
                     canvas.drawPath(sharedPath, tilePaint);
+                } else if (solidCountry) {
+                    tilePaint.setColor(mapData.legionColors[terrLeg]);
+                    canvas.drawPath(sharedPath, tilePaint);
                 } else {
                     tilePaint.setColor(baseColor);
                     canvas.drawPath(sharedPath, tilePaint);
                 }
 
-                // 2. clip + 贴图（采样色格子不画贴图，只显示纯色）
-                if (provinceView || useSampled) {
+                // 2. clip + 贴图（实心国家色/采样色格子不画贴图）
+                if (provinceView || solidCountry || useSampled) {
                     // 不画贴图
                 } else {
                     canvas.save();
@@ -525,19 +882,11 @@ public class HexMapView extends View {
                     canvas.restore();
                 }
 
-                // 2.5 国家/省份归属半透明覆盖：默认开启，只叠色不遮挡地形
-                if (!provinceView && ownershipTint) {
-                    int leg = (provinceOwnerLegion != null && cellIdx < provinceOwnerLegion.length)
-                            ? provinceOwnerLegion[cellIdx] : 0xFF;
-                    if (leg != 0xFF && leg >= 0 && leg < mapData.legionColors.length) {
-                        tilePaint.setColor((mapData.legionColors[leg] & 0x00FFFFFF) | 0x59000000);
-                        canvas.drawPath(sharedPath, tilePaint);
-                    }
+                // 3. 网格（缩得太小时网格不可见，跳过以省大量 drawPath）
+                if (s >= 3f) {
+                    gridPaint.setStrokeWidth(Math.max(0.5f, scale*0.8f));
+                    canvas.drawPath(sharedPath, gridPaint);
                 }
-
-                // 3. 网格
-                gridPaint.setStrokeWidth(Math.max(0.5f, scale*0.8f));
-                canvas.drawPath(sharedPath, gridPaint);
 
                 // 4. 多选高亮
                 if (mapData.multiSelectMode && mapData.selectedBlocks.contains(cellIdx)) {
@@ -775,7 +1124,7 @@ public class HexMapView extends View {
             case MotionEvent.ACTION_MOVE:
                 if (mapData == null) break;
                 // 画笔模式
-                if (mapData.brushMode && e.getPointerCount() == 1) {
+                if (!viewOnly && mapData.brushMode && e.getPointerCount() == 1) {
                     PointF hp = p2h(e.getX(), e.getY());
                     if (hp != null) {
                         int bx = (int)hp.x, by = (int)hp.y;
@@ -828,7 +1177,7 @@ public class HexMapView extends View {
 
     // 选中一个格子（拆出独立方法，ACTION_DOWN 也能调用）
     private void selectCell(int x, int y) {
-        if (mapData == null) return;
+        if (mapData == null || viewOnly) return;
         int idx = y * mapData.width + x;
         if (mapData.brushMode) { applyBrush(x, y); return; }
         if (mapData.multiSelectMode) {
@@ -845,7 +1194,7 @@ public class HexMapView extends View {
     }
     private float sp(MotionEvent e) { if (e.getPointerCount()<2) return 0; float dx=e.getX(0)-e.getX(1), dy=e.getY(0)-e.getY(1); return (float)Math.sqrt(dx*dx+dy*dy); }
     private void applyBrush(int x, int y) {
-        if (mapData == null || mapData.selectedTerrainGroup < 0) return;
+        if (mapData == null || viewOnly || mapData.selectedTerrainGroup < 0) return;
         int g = mapData.selectedTerrainGroup;
         int radius = mapData.brushRadius;
 
@@ -902,7 +1251,7 @@ public class HexMapView extends View {
     }
 
     private void tap(float px, float py) {
-        if (mapData == null) return; PointF h = p2h(px,py); if (h == null) return;
+        if (mapData == null || viewOnly) return; PointF h = p2h(px,py); if (h == null) return;
         int x = (int)h.x, y = (int)h.y;
         if (x>=0 && x<mapData.width && y>=0 && y<mapData.height) {
             int idx = y * mapData.width + x;
@@ -933,7 +1282,7 @@ public class HexMapView extends View {
     private class GestureListener extends GestureDetector.SimpleOnGestureListener {
         @Override public boolean onSingleTapUp(MotionEvent e) { return true; }
         @Override public void onLongPress(MotionEvent e) {
-            if (mapData == null) return; PointF h = p2h(e.getX(),e.getY()); if (h == null) return;
+            if (mapData == null || viewOnly) return; PointF h = p2h(e.getX(),e.getY()); if (h == null) return;
             int x = (int)h.x, y = (int)h.y; if (x>=0&&x<mapData.width&&y>=0&&y<mapData.height) { mapData.setBuildingId(x,y,0); if (selectedX==x&&selectedY==y&&listener!=null) listener.onTileSelected(x,y,mapData.getTile(x,y)); invalidate(); }
         }
     }

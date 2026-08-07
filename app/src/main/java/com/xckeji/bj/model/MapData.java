@@ -27,6 +27,11 @@ public class MapData {
     public java.util.List<Legion> legions = new java.util.ArrayList<>();
     /** 省规划（2字节/格）。 */
     public int[] provinces = new int[0];
+    /**
+     * 存储坐标基准偏移：普通 BTL=0；官方整合版征服文件把建筑/兵种坐标存成
+     * “世界坐标”（地图本地坐标 + 截取偏移），解析时减、写回时加这个值。
+     */
+    public int coordBase = 0;
     /** 城市/建筑记录列表（建筑段 32 字节/条，按文件顺序）。 */
     public java.util.List<Building> buildings = new java.util.ArrayList<>();
 
@@ -70,6 +75,8 @@ public class MapData {
     public boolean multiSelectMode = false;
     public int selectedTerrainGroup = -1;
     public int selectedBuildingId = -1;
+    /** 锁定的兵种代码（-1=未锁定）：点击地图地块连续放置该兵种。 */
+    public int selectedArmyType = -1;
     public boolean brushMode = false;
     public int brushRadius = 0;
     // 笔刷模式辅助

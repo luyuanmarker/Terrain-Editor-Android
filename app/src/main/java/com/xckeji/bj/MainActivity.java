@@ -81,9 +81,15 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
     private LinearLayout armyScroll;
     private Button cityTabBtn;
     private LinearLayout cityScroll;
+    private LinearLayout armyEditorArea;
+    private java.util.List<LinearLayout> armyAddRows;
+    private java.util.List<ImageView> armyIconViews;
     private MapData.Building selectedBuilding;
     private MapData.Building lastEditedBuilding;
     private MapData mapData;
+    /** 最近打开过的世界地形 BIN：先开 BIN 再开征服 BTL 时自动匹配，无需重复选择。 */
+    private byte[] pendingWorldBin;
+    private String pendingWorldBinName;
     private OperationHistory history = new OperationHistory();
     private String currentFileName = "未命名地图";
     // 截取模式：起点 -> 终点 -> 已框选（确认保存 / 取消）
@@ -105,6 +111,18 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
     private FrameLayout buildingDetailOverlay;
     private LinearLayout buildingDetailPanel;
     private EditText[] buildingEds;
+    private FrameLayout btlOverlay;
+    private LinearLayout btlPanel;
+    private EditText[] btlEds;
+    private android.widget.Spinner btlVictorySp, btlEraSp;
+    private FrameLayout btlEventListOverlay;
+    private LinearLayout btlEventListPanel;
+    private FrameLayout btlEventDetailOverlay;
+    private LinearLayout btlEventDetailPanel;
+    private EditText[] btlEventEds;
+    private android.widget.Spinner btlEventCondSp, btlEventTypeSp;
+    private int btlEventEditIndex = -1;
+    private boolean viewOnlyMode = false;
     private java.util.Map<Integer, Bitmap> flagIcons;
     private MapData.Army selectedArmy;
     private MapData.Army lastEditedArmy;
@@ -283,12 +301,13 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         });
         super.onCreate(savedInstanceState);
         loadThumbs();
-        getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN);
-        buildUI();
+        // 兵种数据必须在 buildUI() 之前加载，右侧面板的兵种图标栏才会显示图标
         try {
             ArmyConfig.load(readAssetBytes("json/ArmySettings.json"));
         } catch (Exception ignored) {
         }
+        getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN);
+        buildUI();
         requestPerm();
         showDisclaimerOnce();
         initAudio();
@@ -477,14 +496,19 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         int density = (int) getResources().getDisplayMetrics().density;
         int screenWidthPx = getResources().getDisplayMetrics().widthPixels;
 
-        // 可拖动、左右吸附的浮动右面板
+        // 可拖动、可缩放的浮动右面板：外层容器（左竖条缩放把手 + 内容面板）
         rightPanel = createRightPanel();
         int panelW = (int) (Math.min(320, screenWidthDp - 32) * density);
-        FrameLayout.LayoutParams rpLp = new FrameLayout.LayoutParams(panelW, -1,
-                Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        int screenH = getResources().getDisplayMetrics().heightPixels;
+        LinearLayout panelFrame = new LinearLayout(this);
+        panelFrame.setOrientation(LinearLayout.HORIZONTAL);
+        FrameLayout.LayoutParams rpLp = new FrameLayout.LayoutParams(panelW,
+                screenH - 16 * density, Gravity.RIGHT | Gravity.TOP);
         rpLp.rightMargin = 8 * density;
-        bodyFrame.addView(rightPanel, rpLp);
-        setupDraggablePanel(rightPanel, screenWidthPx, density);
+        rpLp.topMargin = 8 * density;
+        bodyFrame.addView(panelFrame, rpLp);
+        setupDraggablePanel(panelFrame, rightPanel, screenWidthPx, density);
+        panelFrame.addView(rightPanel, new LinearLayout.LayoutParams(0, -1, 1));
 
         // 左侧整合面板：文件（打开/保存）+ 声音（音乐/音效）
         LinearLayout leftPanel = new LinearLayout(this);
@@ -583,7 +607,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         infoPanel.addView(deviceView);
 
         TextView versionView = new TextView(this);
-        versionView.setText("v1.3内测版");
+        versionView.setText("v1.5内测版");
         versionView.setTextColor(0xCCFFFFFF);
         versionView.setTextSize(10);
         infoPanel.addView(versionView);
@@ -591,8 +615,8 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         FrameLayout.LayoutParams infoLp = new FrameLayout.LayoutParams(-2, -2,
                 Gravity.TOP | Gravity.LEFT);
         infoLp.leftMargin = 6 * density;
-        infoLp.topMargin = 6 * density;
-        bodyFrame.addView(infoPanel, infoLp);
+        infoLp.topMargin = 56; // 顶栏高 52px，FPS/设备放在其下方
+        // 不在这里加入 bodyFrame，最后加到 rootFrame 顶层，保证 FPS/设备不被任何面板覆盖
         startFpsCounter(fpsView);
 
         // 顶部居中：截取模式指示 + 确认/取消按钮
@@ -692,6 +716,45 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
                 new FrameLayout.LayoutParams((int) (sw * 0.8), (int) (sh * 0.8), Gravity.CENTER));
         rootFrame.addView(buildingDetailOverlay);
 
+        btlOverlay = new FrameLayout(this);
+        btlOverlay.setLayoutParams(new FrameLayout.LayoutParams(-1, -1));
+        btlOverlay.setVisibility(View.GONE);
+        btlPanel = new LinearLayout(this);
+        btlPanel.setOrientation(LinearLayout.VERTICAL);
+        btlPanel.setBackground(gradientBorderBg(14, 3, 0xFF16213E,
+                new int[]{0xFF3B82F6, 0xFF22D3EE}));
+        btlPanel.setPadding(10 * density, 8 * density, 10 * density, 8 * density);
+        btlOverlay.addView(btlPanel,
+                new FrameLayout.LayoutParams((int) (sw * 0.9), (int) (sh * 0.85), Gravity.CENTER));
+        rootFrame.addView(btlOverlay);
+
+        btlEventListOverlay = new FrameLayout(this);
+        btlEventListOverlay.setLayoutParams(new FrameLayout.LayoutParams(-1, -1));
+        btlEventListOverlay.setVisibility(View.GONE);
+        btlEventListPanel = new LinearLayout(this);
+        btlEventListPanel.setOrientation(LinearLayout.VERTICAL);
+        btlEventListPanel.setBackground(gradientBorderBg(14, 3, 0xFF16213E,
+                new int[]{0xFF3B82F6, 0xFF22D3EE}));
+        btlEventListPanel.setPadding(10 * density, 8 * density, 10 * density, 8 * density);
+        btlEventListOverlay.addView(btlEventListPanel,
+                new FrameLayout.LayoutParams((int) (sw * 0.8), (int) (sh * 0.8), Gravity.CENTER));
+        rootFrame.addView(btlEventListOverlay);
+
+        btlEventDetailOverlay = new FrameLayout(this);
+        btlEventDetailOverlay.setLayoutParams(new FrameLayout.LayoutParams(-1, -1));
+        btlEventDetailOverlay.setVisibility(View.GONE);
+        btlEventDetailPanel = new LinearLayout(this);
+        btlEventDetailPanel.setOrientation(LinearLayout.VERTICAL);
+        btlEventDetailPanel.setBackground(gradientBorderBg(14, 3, 0xFF16213E,
+                new int[]{0xFF3B82F6, 0xFF22D3EE}));
+        btlEventDetailPanel.setPadding(10 * density, 8 * density, 10 * density, 8 * density);
+        btlEventDetailOverlay.addView(btlEventDetailPanel,
+                new FrameLayout.LayoutParams((int) (sw * 0.8), (int) (sh * 0.8), Gravity.CENTER));
+        rootFrame.addView(btlEventDetailOverlay);
+
+        // FPS / 设备 / 版本号：最后加入 rootFrame，永远在最顶层，不被覆盖
+        rootFrame.addView(infoPanel, infoLp);
+
         setContentView(rootFrame);
     }
 
@@ -719,8 +782,13 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         });
     }
 
-    /** 让右面板可通过顶部把手左右拖动，松手后吸附到最近的左/右边缘。 */
-    private void setupDraggablePanel(final LinearLayout panel, final int screenWidthPx, final int density) {
+    /**
+     * 右面板：frame 是可移动/可缩放的外层容器（左竖条缩放 + 内容），
+     * content 是内容面板（顶部把手放在它最上面）。
+     */
+    private void setupDraggablePanel(final LinearLayout frame, final LinearLayout content,
+                                     final int screenWidthPx, final int density) {
+        // 顶部移动把手（放进内容面板顶部）
         LinearLayout handle = new LinearLayout(this);
         handle.setOrientation(LinearLayout.HORIZONTAL);
         handle.setGravity(Gravity.CENTER);
@@ -731,7 +799,40 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         grip.setTextSize(12);
         grip.setPadding(0, 8 * density, 0, 8 * density);
         handle.addView(grip);
-        panel.addView(handle, 0);
+        content.addView(handle, 0);
+
+        // 左侧竖条缩放把手：按住 ⋮ 向右拖=变窄（向右缩小），向左拖=变宽
+        LinearLayout vStrip = new LinearLayout(this);
+        vStrip.setOrientation(LinearLayout.VERTICAL);
+        vStrip.setGravity(Gravity.CENTER);
+        vStrip.setBackgroundColor(Color.parseColor("#1e5fa8"));
+        TextView stripTv = new TextView(this);
+        stripTv.setText("⋮⋮");
+        stripTv.setTextColor(Color.WHITE);
+        stripTv.setTextSize(12);
+        vStrip.addView(stripTv);
+        frame.addView(vStrip, new LinearLayout.LayoutParams(18 * density, -1));
+
+        final int[] rs = new int[2]; // 起始rawX / 起始宽
+        vStrip.setOnTouchListener((v, ev) -> {
+            switch (ev.getActionMasked()) {
+                case android.view.MotionEvent.ACTION_DOWN:
+                    rs[0] = (int) ev.getRawX();
+                    rs[1] = ((FrameLayout.LayoutParams) frame.getLayoutParams()).width;
+                    return true;
+                case android.view.MotionEvent.ACTION_MOVE: {
+                    int delta = (int) ev.getRawX() - rs[0];
+                    int minW = 120 * density;
+                    int maxW = screenWidthPx - 2 * 8 * density - 40 * density;
+                    FrameLayout.LayoutParams lp =
+                            (FrameLayout.LayoutParams) frame.getLayoutParams();
+                    lp.width = Math.max(minW, Math.min(rs[1] - delta, maxW));
+                    frame.setLayoutParams(lp);
+                    return true;
+                }
+            }
+            return false;
+        });
 
         // down[0]=起始rawX, down[1]=起始translationX, down[2]=面板宽度
         final int[] down = new int[3];
@@ -739,37 +840,38 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
             switch (ev.getActionMasked()) {
                 case android.view.MotionEvent.ACTION_DOWN:
                     down[0] = (int) ev.getRawX();
-                    down[1] = (int) panel.getTranslationX();
-                    down[2] = panel.getWidth();
+                    down[1] = (int) frame.getTranslationX();
+                    down[2] = frame.getWidth();
                     if (down[2] <= 0) {
-                        down[2] = ((FrameLayout.LayoutParams) panel.getLayoutParams()).width;
+                        down[2] = ((FrameLayout.LayoutParams) frame.getLayoutParams()).width;
                     }
                     return true;
                 case android.view.MotionEvent.ACTION_MOVE: {
                     int margin = 8 * density;
-                    int left = panel.getLeft(); // 布局位置（不含平移）
+                    int left = frame.getLeft(); // 布局位置（不含平移）
                     float tx = down[1] + (ev.getRawX() - down[0]);
                     float minTx = margin - left;
                     float maxTx = (screenWidthPx - down[2] - margin) - left;
-                    panel.setTranslationX(Math.max(minTx, Math.min(tx, maxTx)));
+                    frame.setTranslationX(Math.max(minTx, Math.min(tx, maxTx)));
                     return true;
                 }
                 case android.view.MotionEvent.ACTION_UP:
                 case android.view.MotionEvent.ACTION_CANCEL: {
                     int margin = 8 * density;
-                    float center = panel.getLeft() + panel.getTranslationX() + down[2] / 2f;
-                    FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) panel.getLayoutParams();
+                    float center = frame.getLeft() + frame.getTranslationX() + down[2] / 2f;
+                    FrameLayout.LayoutParams lp =
+                            (FrameLayout.LayoutParams) frame.getLayoutParams();
                     if (center < screenWidthPx / 2f) {
-                        lp.gravity = Gravity.LEFT | Gravity.CENTER_VERTICAL;
+                        lp.gravity = Gravity.LEFT | Gravity.TOP;
                         lp.leftMargin = margin;
                         lp.rightMargin = 0;
                     } else {
-                        lp.gravity = Gravity.RIGHT | Gravity.CENTER_VERTICAL;
+                        lp.gravity = Gravity.RIGHT | Gravity.TOP;
                         lp.rightMargin = margin;
                         lp.leftMargin = 0;
                     }
-                    panel.setTranslationX(0);
-                    panel.setLayoutParams(lp);
+                    frame.setTranslationX(0);
+                    frame.setLayoutParams(lp);
                     return true;
                 }
             }
@@ -799,13 +901,13 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         bar.addView(undoBtn); bar.addView(spacer(4));
 
         // 工具栏可横向滑动，手机窄屏时所有操作均可访问。
-        String[] labels = {"新建BTL","地图","视图"};
+        String[] labels = {"新建BTL","BTL数据","地图","视图","纯移动"};
         for (int i = 0; i < labels.length; i++) {
             final int a = i;
             Button btn = makeTopBtn(labels[i]);
             btn.setOnClickListener(v -> {
-                if (a == 1) showMapPopup(btn);
-                else if (a == 2) showViewPopup(btn);
+                if (a == 2) showMapPopup(btn);
+                else if (a == 3) showViewPopup(btn);
                 else topAction(a);
             });
             bar.addView(btn);
@@ -841,9 +943,8 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
     private void topAction(int a) {
         switch (a) {
             case 0: newBtlMap(); break;
-            case 1: // 地图按钮：走弹出菜单
-            case 2: // 视图按钮：走弹出菜单
-                break;
+            case 1: showBtlDataOverlay(); break;
+            case 4: toggleViewOnly(); break;
         }
     }
 
@@ -856,11 +957,10 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         acts.add(() -> showExpandDirectionDialog());
         acts.add(() -> startCropSelect());
         acts.add(() -> randomizeTerrainDialog());
-        acts.add(() -> toggleAddArmy());
         acts.add(() -> randomizeArmiesDialog());
         acts.add(() -> showBuildingListOverlay());
         showDropdownMenu(anchor, new String[]{"扩展地图…", "截取地图…", "随机地形…",
-                "添加兵种…", "随机兵力…", "城市列表…"}, acts);
+                "随机兵力…", "城市列表…"}, acts);
     }
 
     private void showViewPopup(View anchor) {
@@ -1227,6 +1327,335 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
             case 44: return "据点";
             case 45: return "工厂";
             default: return "建筑" + type;
+        }
+    }
+
+    /** 纯移动模式：隐藏工具面板，只允许拖动/缩放画面，点击不选中不编辑。 */
+    private void toggleViewOnly() {
+        viewOnlyMode = !viewOnlyMode;
+        if (hexMapView != null) hexMapView.setViewOnly(viewOnlyMode);
+        if (rightPanel != null) {
+            rightPanel.setVisibility(viewOnlyMode ? View.GONE : View.VISIBLE);
+        }
+        Toast.makeText(this, viewOnlyMode
+                        ? "纯移动模式：已隐藏工具面板，拖动只移动画面（再点一次退出）"
+                        : "已退出纯移动模式",
+                Toast.LENGTH_SHORT).show();
+    }
+
+    /** 下拉单选框（深色面板白字，可读性好）。 */
+    private android.widget.Spinner makeSpinner(String[] labels, int selected) {
+        android.widget.ArrayAdapter<String> ad = new android.widget.ArrayAdapter<String>(
+                this, android.R.layout.simple_spinner_item, labels) {
+            @Override
+            public View getView(int position, View convertView, android.view.ViewGroup parent) {
+                TextView tv = (TextView) super.getView(position, convertView, parent);
+                tv.setTextColor(Color.WHITE);
+                tv.setTextSize(14);
+                return tv;
+            }
+        };
+        ad.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        android.widget.Spinner sp = new android.widget.Spinner(this);
+        sp.setAdapter(ad);
+        if (selected >= 0 && selected < labels.length) sp.setSelection(selected);
+        sp.setBackgroundColor(Color.parseColor("#1e293b"));
+        return sp;
+    }
+
+    private static int indexOfVal(int[] vals, int v) {
+        for (int i = 0; i < vals.length; i++) if (vals[i] == v) return i;
+        return -1;
+    }
+
+    private EditText addNumRow(LinearLayout parent, String label, int value) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, 2, 0, 2);
+        TextView lb = new TextView(this);
+        lb.setText(label);
+        lb.setTextSize(14);
+        lb.setTextColor(Color.WHITE);
+        lb.setTypeface(null, android.graphics.Typeface.BOLD);
+        lb.setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1));
+        row.addView(lb);
+        EditText et = new EditText(this);
+        et.setInputType(InputType.TYPE_CLASS_NUMBER);
+        et.setText(String.valueOf(value));
+        et.setTextColor(Color.WHITE);
+        et.setTextSize(14);
+        et.setBackgroundColor(Color.parseColor("#1e293b"));
+        et.setLayoutParams(new LinearLayout.LayoutParams(140, -2));
+        row.addView(et);
+        parent.addView(row);
+        return et;
+    }
+
+    private void addSpinnerRow(LinearLayout parent, String label, android.widget.Spinner sp) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, 2, 0, 2);
+        TextView lb = new TextView(this);
+        lb.setText(label);
+        lb.setTextSize(14);
+        lb.setTextColor(Color.WHITE);
+        lb.setTypeface(null, android.graphics.Typeface.BOLD);
+        lb.setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1));
+        row.addView(lb);
+        sp.setLayoutParams(new LinearLayout.LayoutParams(140, -2));
+        row.addView(sp);
+        parent.addView(row);
+    }
+
+    /** BTL 主数据 + 事件编辑：胜利条件/战役时代/事件触发条件/触发事件均为下拉单选框。 */
+    private void showBtlDataOverlay() {
+        if (mapData == null || mapData.btlOriginalData == null) {
+            Toast.makeText(this, "请先加载 BTL 地图", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        final int density = (int) getResources().getDisplayMetrics().density;
+        final byte[] btl = mapData.btlOriginalData;
+        final FileParser.BtlHeaderInfo h = FileParser.parseBTLHeader(btl);
+        final java.nio.ByteBuffer bb = java.nio.ByteBuffer.wrap(btl)
+                .order(java.nio.ByteOrder.LITTLE_ENDIAN);
+
+        btlPanel.removeAllViews();
+        btlPanel.addView(makeOverlayHeader("BTL 主数据与事件",
+                () -> btlOverlay.setVisibility(View.GONE),
+                () -> btlOverlay.setVisibility(View.GONE)));
+        ScrollView sv = new ScrollView(this);
+        LinearLayout l = new LinearLayout(this);
+        l.setOrientation(LinearLayout.VERTICAL);
+
+        TextView infoTv = new TextView(this);
+        infoTv.setText(String.format(java.util.Locale.US,
+                "版本 %d  地图序号 %d  截取(%d,%d)  %dx%d\n军团 %d  建筑 %d  兵种 %d  方案 %d  事件 %d  天气 %d  地块 %d",
+                h.version, h.mapId, h.captureX, h.captureY, h.width, h.height,
+                h.legionCount, h.buildingCount, h.armyCount, h.planCount,
+                h.eventCount, h.weatherCount, h.width * h.height));
+        infoTv.setTextSize(12);
+        infoTv.setTextColor(0xFFcbd5e1);
+        infoTv.setPadding(4, 4, 4, 8);
+        l.addView(infoTv);
+
+        // 可编辑主数据
+        btlVictorySp = makeSpinner(new String[]{"00 占领红圈", "01 消灭全部", "02 保护红圈"},
+                indexOfVal(new int[]{0, 1, 2}, bb.getInt(0x30)));
+        btlEraSp = makeSpinner(new String[]{"00 二战", "01 冷战"},
+                indexOfVal(new int[]{0, 1}, bb.getInt(0x50)));
+        addSpinnerRow(l, "胜利条件", btlVictorySp);
+        btlEds = new EditText[5];
+        btlEds[0] = addNumRow(l, "最小回合", bb.getInt(0x34));
+        btlEds[1] = addNumRow(l, "最大回合", bb.getInt(0x38));
+        addSpinnerRow(l, "战役时代", btlEraSp);
+        btlEds[2] = addNumRow(l, "积攒金钱", bb.getInt(0x5C));
+        btlEds[3] = addNumRow(l, "积攒齿轮", bb.getInt(0x60));
+        btlEds[4] = addNumRow(l, "积攒原子", bb.getInt(0x64));
+        Button saveHdr = new Button(this);
+        saveHdr.setText("保存主数据");
+        saveHdr.setTextSize(13);
+        saveHdr.setTextColor(Color.WHITE);
+        saveHdr.setBackgroundColor(Color.parseColor("#22c55e"));
+        saveHdr.setOnClickListener(v -> saveBtlHeader());
+        l.addView(saveHdr);
+
+        // 事件入口：主数据页单独一栏，点击进入事件列表，再点具体事件进编辑页
+        if (h.eventCount > 0) {
+            Button evBtn = new Button(this);
+            evBtn.setText("事件列表（" + h.eventCount + " 条）→");
+            evBtn.setTextSize(13);
+            evBtn.setTextColor(Color.WHITE);
+            evBtn.setBackgroundColor(Color.parseColor("#1e5fa8"));
+            evBtn.setOnClickListener(v -> showBtlEventListOverlay());
+            l.addView(evBtn);
+        }
+
+        sv.addView(l);
+        btlPanel.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1));
+        btlOverlay.setVisibility(View.VISIBLE);
+    }
+
+    private void saveBtlHeader() {
+        try {
+            byte[] raw = mapData.btlOriginalData.clone();
+            java.nio.ByteBuffer b2 = java.nio.ByteBuffer.wrap(raw)
+                    .order(java.nio.ByteOrder.LITTLE_ENDIAN);
+            int[] victoryVals = {0, 1, 2};
+            b2.putInt(0x30, victoryVals[btlVictorySp.getSelectedItemPosition()]);
+            b2.putInt(0x50, btlEraSp.getSelectedItemPosition());
+            b2.putInt(0x34, Integer.parseInt(btlEds[0].getText().toString().trim()));
+            b2.putInt(0x38, Integer.parseInt(btlEds[1].getText().toString().trim()));
+            b2.putInt(0x5C, Integer.parseInt(btlEds[2].getText().toString().trim()));
+            b2.putInt(0x60, Integer.parseInt(btlEds[3].getText().toString().trim()));
+            b2.putInt(0x64, Integer.parseInt(btlEds[4].getText().toString().trim()));
+            FileParser.patchHeader(mapData, raw);
+            hexMapView.refresh();
+            Toast.makeText(this, "主数据已保存", Toast.LENGTH_SHORT).show();
+        } catch (Exception e) {
+            Toast.makeText(this, "保存失败: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private static String eventCondLabel(int v) {
+        switch (v) {
+            case 0: return "占城触发";
+            case 1: return "单位死亡";
+            case 2: return "回合触发";
+            case 4: return "连带触发";
+            default: return String.format(java.util.Locale.US, "0x%02X", v);
+        }
+    }
+
+    private static String eventTypeLabel(int v) {
+        switch (v) {
+            case 0: return "士气上升";
+            case 1: return "士气下降";
+            case 2: return "士气大降";
+            case 3: return "混乱";
+            case 4: return "调用对话";
+            case 6: return "方针转变";
+            case 7: return "阵营变化";
+            case 8: return "向某方位移动";
+            case 16: return "加钱";
+            case 17: return "加工业";
+            case 18: return "加科技";
+            default: return String.format(java.util.Locale.US, "0x%02X", v);
+        }
+    }
+
+    /** 事件列表页：一行一条，点击进入编辑页。 */
+    private void showBtlEventListOverlay() {
+        if (mapData == null || mapData.btlOriginalData == null) return;
+        final byte[] btl = mapData.btlOriginalData;
+        final FileParser.BtlHeaderInfo h = FileParser.parseBTLHeader(btl);
+        final int start = FileParser.eventStart(h);
+        final java.nio.ByteBuffer bb = java.nio.ByteBuffer.wrap(btl)
+                .order(java.nio.ByteOrder.LITTLE_ENDIAN);
+        btlEventListPanel.removeAllViews();
+        btlEventListPanel.addView(makeOverlayHeader("事件列表（点击进入编辑）",
+                () -> btlEventListOverlay.setVisibility(View.GONE),
+                () -> btlEventListOverlay.setVisibility(View.GONE)));
+        ScrollView sv = new ScrollView(this);
+        LinearLayout l = new LinearLayout(this);
+        l.setOrientation(LinearLayout.VERTICAL);
+        for (int i = 0; i < h.eventCount; i++) {
+            int addr = start + i * 44;
+            if (addr + 44 > btl.length) break;
+            final int idx = i;
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(6, 10, 6, 10);
+            row.setClickable(true);
+            row.setBackgroundColor(Color.parseColor("#1e293b"));
+            row.setOnClickListener(v -> {
+                btlEventListOverlay.setVisibility(View.GONE);
+                showBtlEventDetailOverlay(idx);
+            });
+            TextView tv = new TextView(this);
+            tv.setText(String.format(java.util.Locale.US,
+                    "事件 #%d   触发条件:%s   触发事件:%s   回合:%d",
+                    idx, eventCondLabel(btl[addr + 0x8] & 0xFF),
+                    eventTypeLabel(btl[addr + 0xC] & 0xFF), bb.getInt(addr + 0x20)));
+            tv.setTextSize(14);
+            tv.setTextColor(Color.WHITE);
+            row.addView(tv);
+            l.addView(row);
+            View div = new View(this);
+            div.setBackgroundColor(0x22FFFFFF);
+            div.setLayoutParams(new LinearLayout.LayoutParams(-1, 1));
+            l.addView(div);
+        }
+        sv.addView(l);
+        btlEventListPanel.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1));
+        btlEventListOverlay.setVisibility(View.VISIBLE);
+    }
+
+    /** 单个事件编辑页：触发条件/触发事件下拉，其余数值可改。 */
+    private void showBtlEventDetailOverlay(final int idx) {
+        if (mapData == null || mapData.btlOriginalData == null) return;
+        btlEventEditIndex = idx;
+        final byte[] btl = mapData.btlOriginalData;
+        final FileParser.BtlHeaderInfo h = FileParser.parseBTLHeader(btl);
+        final int addr = FileParser.eventStart(h) + idx * 44;
+        final java.nio.ByteBuffer bb = java.nio.ByteBuffer.wrap(btl)
+                .order(java.nio.ByteOrder.LITTLE_ENDIAN);
+        if (addr + 44 > btl.length) {
+            Toast.makeText(this, "事件记录越界", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        btlEventDetailPanel.removeAllViews();
+        btlEventDetailPanel.addView(makeOverlayHeader("事件 #" + idx,
+                () -> {
+                    btlEventDetailOverlay.setVisibility(View.GONE);
+                    showBtlEventListOverlay();
+                },
+                () -> btlEventDetailOverlay.setVisibility(View.GONE)));
+        ScrollView sv = new ScrollView(this);
+        LinearLayout l = new LinearLayout(this);
+        l.setOrientation(LinearLayout.VERTICAL);
+
+        int[] condVals = {0, 1, 2, 4};
+        int[] typeVals = {0, 1, 2, 3, 4, 6, 7, 8, 16, 17, 18};
+        String[] condLabels = {"00 占城触发", "01 单位死亡", "02 回合触发", "04 连带触发"};
+        String[] typeLabels = {"00 士气上升", "01 士气下降", "02 士气大降", "03 混乱",
+                "04 调用对话", "06 方针转变", "07 阵营变化", "08 向某方位移动",
+                "10 加钱", "11 加工业", "12 加科技"};
+        btlEventCondSp = makeSpinner(condLabels, indexOfVal(condVals, btl[addr + 0x8] & 0xFF));
+        btlEventTypeSp = makeSpinner(typeLabels, indexOfVal(typeVals, btl[addr + 0xC] & 0xFF));
+        addSpinnerRow(l, "触发条件", btlEventCondSp);
+        addSpinnerRow(l, "触发事件", btlEventTypeSp);
+        btlEventEds = new EditText[7];
+        btlEventEds[0] = addNumRow(l, "序号", bb.getInt(addr + 0x0));
+        btlEventEds[1] = addNumRow(l, "关联事件", bb.getInt(addr + 0x4));
+        btlEventEds[2] = addNumRow(l, "触发军团", bb.getInt(addr + 0x10));
+        btlEventEds[3] = addNumRow(l, "加成军团", bb.getInt(addr + 0x14));
+        btlEventEds[4] = addNumRow(l, "阵营变换", bb.getInt(addr + 0x18));
+        btlEventEds[5] = addNumRow(l, "触发回合", bb.getInt(addr + 0x20));
+        btlEventEds[6] = addNumRow(l, "对话代码", bb.getInt(addr + 0x24));
+
+        Button saveBtn = new Button(this);
+        saveBtn.setText("保存事件");
+        saveBtn.setTextSize(13);
+        saveBtn.setTextColor(Color.WHITE);
+        saveBtn.setBackgroundColor(Color.parseColor("#22c55e"));
+        saveBtn.setOnClickListener(v -> saveBtlEvent());
+        l.addView(saveBtn);
+
+        sv.addView(l);
+        btlEventDetailPanel.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1));
+        btlEventDetailOverlay.setVisibility(View.VISIBLE);
+    }
+
+    private void saveBtlEvent() {
+        try {
+            if (btlEventEditIndex < 0 || btlEventEds == null) return;
+            FileParser.BtlHeaderInfo h = FileParser.parseBTLHeader(mapData.btlOriginalData);
+            int start = FileParser.eventStart(h);
+            byte[] raw = new byte[44];
+            System.arraycopy(mapData.btlOriginalData, start + btlEventEditIndex * 44, raw, 0, 44);
+            java.nio.ByteBuffer b2 = java.nio.ByteBuffer.wrap(raw)
+                    .order(java.nio.ByteOrder.LITTLE_ENDIAN);
+            int[] condVals = {0, 1, 2, 4};
+            int[] typeVals = {0, 1, 2, 3, 4, 6, 7, 8, 16, 17, 18};
+            b2.putInt(0x0, Integer.parseInt(btlEventEds[0].getText().toString().trim()));
+            b2.putInt(0x4, Integer.parseInt(btlEventEds[1].getText().toString().trim()));
+            b2.putInt(0x10, Integer.parseInt(btlEventEds[2].getText().toString().trim()));
+            b2.putInt(0x14, Integer.parseInt(btlEventEds[3].getText().toString().trim()));
+            b2.putInt(0x18, Integer.parseInt(btlEventEds[4].getText().toString().trim()));
+            b2.putInt(0x20, Integer.parseInt(btlEventEds[5].getText().toString().trim()));
+            b2.putInt(0x24, Integer.parseInt(btlEventEds[6].getText().toString().trim()));
+            raw[0x8] = (byte) condVals[btlEventCondSp.getSelectedItemPosition()];
+            raw[0xC] = (byte) typeVals[btlEventTypeSp.getSelectedItemPosition()];
+            FileParser.patchEvent(mapData, btlEventEditIndex, raw);
+            hexMapView.refresh();
+            btlEventDetailOverlay.setVisibility(View.GONE);
+            Toast.makeText(this, "事件已保存", Toast.LENGTH_SHORT).show();
+            showBtlEventListOverlay();
+        } catch (Exception e) {
+            Toast.makeText(this, "保存失败: " + e.getMessage(), Toast.LENGTH_LONG).show();
         }
     }
 
@@ -1796,18 +2225,30 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
                     mapData.tiles.get(i).toBytes(newBtl, terrainStart + i * 16);
                 }
 
-                // 省规划（2字节/格）
+                // 省规划（2字节/格）：值是“省份代表地块坐标”，扩展后必须重映射，
+                // 否则地块移位后省坐标仍指向旧位置，游戏里省颜色会错乱
                 for (int i = 0; i < newTotal; i++) {
                     int addr = newAdminStart + i * 2;
                     int oi = oldIndexOfNew[i];
-                    if (oi >= 0) {
-                        newBtl[addr] = oldBtl[oldAdminStart + oi * 2];
-                        newBtl[addr + 1] = oldBtl[oldAdminStart + oi * 2 + 1];
-                    } else {
+                    if (oi < 0) {
                         byte v = (byte) (fillTile.bmTerrain1Group == 1 ? 0 : 0xFF);
                         newBtl[addr] = v;
                         newBtl[addr + 1] = v;
+                        continue;
                     }
+                    int oldPv = (oldBtl[oldAdminStart + oi * 2] & 0xFF)
+                            | ((oldBtl[oldAdminStart + oi * 2 + 1] & 0xFF) << 8);
+                    int npv = oldPv;
+                    if (oldPv != 0 && oldPv != 0xFFFF) {
+                        int cb = mapData.coordBase;
+                        int localPv = oldPv - cb;
+                        if (localPv >= 0 && localPv < oldTotal) {
+                            int nLocal = remap.applyAsInt(localPv);
+                            if (nLocal >= 0 && nLocal <= 0xFFFF - cb) npv = nLocal + cb;
+                        }
+                    }
+                    newBtl[addr] = (byte) (npv & 0xFF);
+                    newBtl[addr + 1] = (byte) ((npv >> 8) & 0xFF);
                 }
 
                 // 军团归属（1字节/格）
@@ -1826,17 +2267,20 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
                     for (int i = 0; i < header.buildingCount; i++) {
                         int addr = newBuildingStart + i * 32;
                         if (addr + 4 > newFileSize) break;
-                        int coord = ByteBuffer.wrap(newBtl).order(ByteOrder.LITTLE_ENDIAN).getShort(addr) & 0xFFFF;
-                        if (coord < oldTotal) {
+                        int coord = (ByteBuffer.wrap(newBtl).order(ByteOrder.LITTLE_ENDIAN)
+                                .getShort(addr) & 0xFFFF) - mapData.coordBase;
+                        if (coord >= 0 && coord < oldTotal) {
                             int nc = remap.applyAsInt(coord);
-                            newBtl[addr] = (byte) (nc & 0xFF);
-                            newBtl[addr + 1] = (byte) ((nc >>> 8) & 0xFF);
+                            int stored = nc + mapData.coordBase;
+                            newBtl[addr] = (byte) (stored & 0xFF);
+                            newBtl[addr + 1] = (byte) ((stored >>> 8) & 0xFF);
                         }
                     }
                 }
 
                 // 建筑之后各业务段（兵种/方案/援军/空袭/陷阱）的地块索引重映射
-                FileParser.remapSectionTileIndexes(newBtl, newBuildingStart, header, remap);
+                FileParser.remapSectionTileIndexes(newBtl, newBuildingStart, header, remap,
+                        mapData.coordBase);
 
                 // 头部宽高与地块总数
                 ByteBuffer bb = ByteBuffer.wrap(newBtl).order(ByteOrder.LITTLE_ENDIAN);
@@ -2028,6 +2472,9 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         div.setLayoutParams(new LinearLayout.LayoutParams(-1, 1));
         div.setBackgroundColor(Color.parseColor("#e5e7eb"));
         panel.addView(div);
+
+        // 兵种图标栏：直接显示在面板顶部，点图标锁定后点地图地块连续添加
+        buildArmyIconBar(panel);
 
         // 标签
         LinearLayout tabRow = new LinearLayout(this);
@@ -2223,16 +2670,19 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         contentArea.addView(terrainScroll);
         contentArea.addView(buildingScroll);
 
-        // 兵种编辑页：选中兵种后由 rebuildArmyEditor 填充 48 字段输入框
+        // 兵种页：点击地图上已有兵种格子的 48 字段编辑区
         armyScroll = new LinearLayout(this);
         armyScroll.setOrientation(LinearLayout.VERTICAL);
         armyScroll.setVisibility(View.GONE);
-        TextView armyHint = new TextView(this);
-        armyHint.setText("请先在地图上点击一个有兵种的格子");
-        armyHint.setTextSize(12);
-        armyHint.setTextColor(0xFF9ca3af);
-        armyHint.setPadding(8, 12, 8, 12);
-        armyScroll.addView(armyHint);
+        TextView editHint = new TextView(this);
+        editHint.setText("点击地图上已有兵种的格子查看/修改 48 字段");
+        editHint.setTextSize(12);
+        editHint.setTextColor(0xFF9ca3af);
+        editHint.setPadding(8, 10, 8, 2);
+        armyScroll.addView(editHint);
+        armyEditorArea = new LinearLayout(this);
+        armyEditorArea.setOrientation(LinearLayout.VERTICAL);
+        armyScroll.addView(armyEditorArea);
         contentArea.addView(armyScroll);
 
         // 城市编辑页：选中有建筑的地块后，由 rebuildCityEditor 填充 32 字段输入框
@@ -2287,17 +2737,200 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         b.show();
     }
 
-    /** 在“兵种”页直接展示/编辑“兵种48”记录的全部字段（输入框形式）。 */
+    /** 兵种选择列表（像地形一样）：点选后点击地图放置，可加入任意容器（如设施页建筑列表旁）。 */
+    private void buildArmyAddRows(final LinearLayout target) {
+        if (target == null) return;
+        int density = (int) getResources().getDisplayMetrics().density;
+        TextView hint = new TextView(this);
+        hint.setText("点击兵种图标锁定，然后连续点击地图地块添加（再点一次取消）");
+        hint.setTextSize(12);
+        hint.setTextColor(0xFF9ca3af);
+        hint.setPadding(8, 10, 8, 4);
+        target.addView(hint);
+        if (armyAddRows == null) armyAddRows = new java.util.ArrayList<>();
+        if (ArmyConfig.ALL != null) {
+            // 按兵种代码去重（同一代码只是国家变体），列表更清爽、图标一一对应
+            java.util.LinkedHashMap<Integer, ArmyConfig> uniq = new java.util.LinkedHashMap<>();
+            for (ArmyConfig c : ArmyConfig.ALL) {
+                // 只显示 1~40 号兵种，41 及以后不显示
+                if (c != null && c.army >= 1 && c.army <= 40
+                        && !uniq.containsKey(c.army)) uniq.put(c.army, c);
+            }
+            for (final ArmyConfig c : uniq.values()) {
+                final LinearLayout row = new LinearLayout(this);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                row.setGravity(Gravity.CENTER_VERTICAL);
+                row.setPadding(8, 6, 8, 6);
+                row.setClickable(true);
+                Bitmap icon = loadArmyIcon(c.army);
+                if (icon == null) icon = makeArmyIconPlaceholder(c.army);
+                if (icon != null) {
+                    ImageView iv = new ImageView(this);
+                    iv.setImageBitmap(icon);
+                    iv.setLayoutParams(new LinearLayout.LayoutParams(38 * density, 38 * density));
+                    iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
+                    row.addView(iv);
+                }
+                TextView tv = new TextView(this);
+                tv.setText(c.name + "（代码" + c.army + "）\n" + c.summary());
+                tv.setTextSize(13);
+                tv.setTextColor(0xFF374151);
+                tv.setPadding(8, 0, 0, 0);
+                row.addView(tv);
+                row.setTag(c.army);
+                row.setOnClickListener(v -> toggleArmyLock(c, row));
+                armyAddRows.add(row);
+                target.addView(row);
+                View div = new View(this);
+                div.setBackgroundColor(0x22FFFFFF);
+                div.setLayoutParams(new LinearLayout.LayoutParams(-1, 1));
+                target.addView(div);
+            }
+        }
+    }
+
+    /** 兵种图标：优先真实图标，缺图时退回红色变体。 */
+    private Bitmap loadArmyIcon(int army) {
+        Bitmap b = loadBmp("legion/legion_icon_" + army + ".png");
+        if (b != null) return b;
+        return loadBmp("legion/legion_icon_r_" + army + ".png");
+    }
+
+    /** 无图标的兵种代码：生成带代码数字的彩色占位图标，保证每行都有图标。 */
+    private Bitmap makeArmyIconPlaceholder(int army) {
+        int size = 48;
+        Bitmap bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+        android.graphics.Canvas c = new android.graphics.Canvas(bmp);
+        int[] colors = {0xFF3B82F6, 0xFF22C55E, 0xFFF59E0B, 0xFFEF4444,
+                0xFF8B5CF6, 0xFF06B6D4, 0xFFF97316, 0xFF84CC16};
+        android.graphics.Paint p = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        p.setColor(colors[army % colors.length]);
+        c.drawRoundRect(new android.graphics.RectF(1, 1, size - 1, size - 1), 8, 8, p);
+        p.setColor(0xFFFFFFFF);
+        p.setTextSize(20);
+        p.setTextAlign(android.graphics.Paint.Align.CENTER);
+        p.setFakeBoldText(true);
+        c.drawText(String.valueOf(army), size / 2f, size / 2f + 7, p);
+        return bmp;
+    }
+
+    /** 右侧面板顶部：直接显示一排兵种图标，点图标锁定，点地图地块连续添加。 */
+    private void buildArmyIconBar(LinearLayout panel) {
+        int density = (int) getResources().getDisplayMetrics().density;
+        TextView hint = new TextView(this);
+        hint.setText("兵种：点图标锁定，再点地图添加（再点一次取消）");
+        hint.setTextSize(11);
+        hint.setTextColor(0xFF6b7280);
+        hint.setPadding(6, 6, 6, 2);
+        panel.addView(hint);
+        HorizontalScrollView hsv = new HorizontalScrollView(this);
+        hsv.setLayoutParams(new LinearLayout.LayoutParams(-1, 56 * density));
+        hsv.setHorizontalScrollBarEnabled(false);
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        armyIconViews = new java.util.ArrayList<>();
+        if (ArmyConfig.ALL != null) {
+            java.util.LinkedHashMap<Integer, ArmyConfig> uniq = new java.util.LinkedHashMap<>();
+            for (ArmyConfig c : ArmyConfig.ALL) {
+                // 只显示 1~40 号兵种，41 及以后不显示
+                if (c != null && c.army >= 1 && c.army <= 40
+                        && !uniq.containsKey(c.army)) uniq.put(c.army, c);
+            }
+            for (final ArmyConfig c : uniq.values()) {
+                Bitmap icon = loadArmyIcon(c.army);
+                if (icon == null) continue; // 没有图标的兵种不显示
+                ImageView iv = new ImageView(this);
+                iv.setTag(c.army);
+                iv.setImageBitmap(icon);
+                iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
+                LinearLayout.LayoutParams lp =
+                        new LinearLayout.LayoutParams(48 * density, 48 * density);
+                lp.setMargins(3 * density, 2 * density, 3 * density, 2 * density);
+                iv.setLayoutParams(lp);
+                iv.setPadding(2, 2, 2, 2);
+                iv.setClickable(true);
+                iv.setOnClickListener(v -> toggleArmyIconLock(c, iv));
+                armyIconViews.add(iv);
+                row.addView(iv);
+            }
+        }
+        hsv.addView(row);
+        panel.addView(hsv);
+        View div2 = new View(this);
+        div2.setLayoutParams(new LinearLayout.LayoutParams(-1, 1));
+        div2.setBackgroundColor(Color.parseColor("#e5e7eb"));
+        panel.addView(div2);
+    }
+
+    /** 点兵种图标：锁定/取消锁定。 */
+    private void toggleArmyIconLock(final ArmyConfig c, final ImageView iv) {
+        if (mapData == null || mapData.btlOriginalData == null) {
+            Toast.makeText(this, "请先加载 BTL 地图", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (mapData.selectedArmyType == c.army) {
+            mapData.selectedArmyType = -1;
+            highlightArmyIcons();
+            Toast.makeText(this, "已取消锁定", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        mapData.selectedArmyType = c.army;
+        highlightArmyIcons();
+        Toast.makeText(this, "已锁定 " + c.name + "，连续点击地图地块添加（再点一次取消）",
+                Toast.LENGTH_LONG).show();
+    }
+
+    /** 高亮当前锁定的兵种图标。 */
+    private void highlightArmyIcons() {
+        if (armyIconViews == null) return;
+        for (ImageView iv : armyIconViews) {
+            Object tag = iv.getTag();
+            iv.setBackgroundColor(tag instanceof Integer
+                    && (Integer) tag == mapData.selectedArmyType ? 0x663b82f6 : 0x00000000);
+        }
+    }
+
+    /** 点选兵种：锁定/取消锁定，锁定后可连续点击地图地块添加多个兵。 */
+    private void toggleArmyLock(final ArmyConfig c, final LinearLayout row) {
+        if (mapData == null || mapData.btlOriginalData == null) {
+            Toast.makeText(this, "请先加载 BTL 地图", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (mapData.selectedArmyType == c.army) {
+            mapData.selectedArmyType = -1;
+            highlightArmyRows();
+            Toast.makeText(this, "已取消锁定", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        mapData.selectedArmyType = c.army;
+        highlightArmyRows();
+        Toast.makeText(this, "已锁定 " + c.name + "，连续点击地图地块添加（再点一次取消）",
+                Toast.LENGTH_LONG).show();
+    }
+
+    /** 高亮当前锁定的兵种行。 */
+    private void highlightArmyRows() {
+        if (armyAddRows == null) return;
+        if (armyAddRows != null) {
+            for (LinearLayout r : armyAddRows) {
+                Object tag = r.getTag();
+                r.setBackgroundColor(tag instanceof Integer
+                        && (Integer) tag == mapData.selectedArmyType ? 0x333b82f6 : 0x00000000);
+            }
+        }
+    }
+
+    /** 在“兵种”页编辑区展示/编辑“兵种48”记录的全部字段（输入框形式）。 */
     private void rebuildArmyEditor() {
-        if (armyScroll == null) return;
-        armyScroll.removeAllViews();
+        if (armyEditorArea == null) return;
+        armyEditorArea.removeAllViews();
         if (selectedArmy == null || selectedArmy.raw == null) {
             TextView hint = new TextView(this);
-            hint.setText("请先在地图上点击一个有兵种的格子");
+            hint.setText("请先在地图上点击一个有兵种的格子查看/修改");
             hint.setTextSize(12);
             hint.setTextColor(0xFF9ca3af);
             hint.setPadding(8, 12, 8, 12);
-            armyScroll.addView(hint);
+            armyEditorArea.addView(hint);
             return;
         }
         final MapData.Army army = selectedArmy;
@@ -2308,7 +2941,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         head.setTextColor(0xFF1f2937);
         head.setTypeface(null, android.graphics.Typeface.BOLD);
         head.setPadding(8, 6, 8, 6);
-        armyScroll.addView(head);
+        armyEditorArea.addView(head);
 
         armySaveBtn = new Button(this);
         armySaveBtn.setText("保存修改");
@@ -2336,7 +2969,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
                 Toast.makeText(this, "保存失败: " + e.getMessage(), Toast.LENGTH_LONG).show();
             }
         });
-        armyScroll.addView(armySaveBtn);
+        armyEditorArea.addView(armySaveBtn);
 
         armyEds = new EditText[ARMY_FIELDS.length];
         for (int i = 0; i < ARMY_FIELDS.length; i++) {
@@ -2359,7 +2992,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
             et.setLayoutParams(new LinearLayout.LayoutParams(120, -2));
             armyEds[i] = et;
             row.addView(et);
-            armyScroll.addView(row);
+            armyEditorArea.addView(row);
         }
     }
 
@@ -2549,13 +3182,55 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
                 return; // 已框选：等待确认/取消
             }
         }
+        // 锁定的兵种：点击地块连续添加（归属跟随地块）
+        if (mapData != null && mapData.selectedArmyType >= 0
+                && mapData.btlOriginalData != null) {
+            ArmyConfig cfg = ArmyConfig.byArmy(mapData.selectedArmyType);
+            if (cfg == null) {
+                mapData.selectedArmyType = -1;
+                highlightArmyIcons();
+            } else {
+                try {
+                    int legion = tileOwnershipLegion(x, y);
+                    byte[] raw = buildNewArmyRaw(x, y, cfg);
+                    FileParser.addArmy(mapData, x, y, cfg.army, raw, legion);
+                    hexMapView.refresh();
+                    updateInfo();
+                    Toast.makeText(this, "已放置 " + cfg.name + "（军团" + (legion + 1)
+                            + "），可继续点击其他地块",
+                            Toast.LENGTH_SHORT).show();
+                } catch (Exception e) {
+                    Toast.makeText(this, "放置失败: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                }
+            }
+            return;
+        }
         updateInfo();
+    }
+
+    /** 地块归属军团：优先按格归属，中立格用省份归属兜底，都没有归第一军团。 */
+    private int tileOwnershipLegion(int x, int y) {
+        if (mapData == null) return 0;
+        int idx = y * mapData.width + x;
+        if (mapData.belongs != null && idx < mapData.belongs.length) {
+            int leg = mapData.belongs[idx] & 0xFF;
+            if (leg != 0xFF && leg < mapData.legionColors.length) return leg;
+        }
+        if (mapData.provinces != null && idx < mapData.provinces.length) {
+            int p = mapData.provinces[idx];
+            if (p != 0 && p != 0xFFFF && p < mapData.getTotalTiles()
+                    && mapData.belongs != null && p < mapData.belongs.length) {
+                int leg = mapData.belongs[p] & 0xFF;
+                if (leg != 0xFF && leg < mapData.legionColors.length) return leg;
+            }
+        }
+        return 0;
     }
 
     /** 新兵种的默认 48 字节记录：坐标 + 兵种 + 等级1 + 编制1 + 基础数值。 */
     private byte[] buildNewArmyRaw(int x, int y, ArmyConfig cfg) {
         byte[] raw = new byte[48];
-        int coord = y * mapData.width + x;
+        int coord = y * mapData.width + x + (mapData.coordBase != 0 ? mapData.coordBase : 0);
         raw[0] = (byte) (coord & 0xFF);
         raw[1] = (byte) ((coord >> 8) & 0xFF);
         raw[2] = (byte) cfg.army;   // 兵种
@@ -2947,12 +3622,51 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
     }
 
     private void loadFile(File f) {
-        try{FileInputStream fis=new FileInputStream(f);byte[] d=new byte[(int)f.length()];fis.read(d);fis.close();
-            mapData=FileParser.loadFile(d,f.getName());currentFileName=f.getName();history.clear();if(mapData!=null)mapData.historyRef=history;
-            hexMapView.setMapData(mapData);updateInfo();updateBtnState();
-            blockIdText.setText("未选中");selectedInfo.setText("已加载: "+f.getName());
+        try {
+            FileInputStream fis = new FileInputStream(f);
+            byte[] d = new byte[(int) f.length()];
+            fis.read(d);
+            fis.close();
+            // 当前已是征服 BTL、打开的是 BIN 时，把它当作该 BTL 的世界地形加载
+            if (mapData != null && mapData.btlOriginalData != null) {
+                FileParser.BtlHeaderInfo hi = FileParser.parseBTLHeader(mapData.btlOriginalData);
+                if (!hi.independentTerrain && f.getName().toLowerCase().endsWith(".bin")) {
+                    try {
+                        FileParser.loadConquestTerrain(mapData, d);
+                        mapData.binOriginalData = d;
+                        mapData.binFileName = f.getName();
+                        pendingWorldBin = d;
+                        pendingWorldBinName = f.getName();
+                        hexMapView.setMapData(mapData);
+                        hexMapView.refresh();
+                        updateInfo();
+                        selectedInfo.setText("已加载征服地形: " + f.getName());
+                        Toast.makeText(this, "世界地形已加载，可像战役一样修改征服", Toast.LENGTH_LONG).show();
+                        return;
+                    } catch (Exception e) {
+                        Toast.makeText(this, "征服地形加载失败: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                        return;
+                    }
+                }
+            }
+            mapData = FileParser.loadFile(d, f.getName());
+            currentFileName = f.getName();
+            history.clear();
+            if (mapData != null) mapData.historyRef = history;
+            // 记住刚打开的世界地形 BIN，供后续征服 BTL 自动匹配
+            if (mapData.binOriginalData != null) {
+                pendingWorldBin = mapData.binOriginalData;
+                pendingWorldBinName = f.getName();
+            }
+            hexMapView.setMapData(mapData);
+            updateInfo();
+            updateBtnState();
+            blockIdText.setText("未选中");
+            selectedInfo.setText("已加载: " + f.getName());
             maybeLoadConquestBin();
-        }catch(Exception e){Toast.makeText(this,"加载失败: "+e.getMessage(),Toast.LENGTH_LONG).show();}
+        } catch (Exception e) {
+            Toast.makeText(this, "加载失败: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
     }
 
     /** 加载的 BTL 若为征服地图（地图序号!=0，地形在 world BIN 中），提示选择 BIN。 */
@@ -2960,6 +3674,24 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         if (mapData == null || mapData.btlOriginalData == null) return;
         FileParser.BtlHeaderInfo hi = FileParser.parseBTLHeader(mapData.btlOriginalData);
         if (hi.independentTerrain) return;
+        // 若最近打开过世界地形 BIN 且窗口匹配，直接自动加载，不再弹窗
+        if (pendingWorldBin != null) {
+            try {
+                FileParser.loadConquestTerrain(mapData, pendingWorldBin);
+                mapData.binOriginalData = pendingWorldBin;
+                mapData.binFileName = pendingWorldBinName;
+                hexMapView.setMapData(mapData);
+                hexMapView.refresh();
+                updateInfo();
+                selectedInfo.setText("已自动匹配世界地形: "
+                        + (pendingWorldBinName == null ? "world.bin" : pendingWorldBinName));
+                Toast.makeText(this, "已自动匹配最近打开的世界地形，可像战役一样修改征服",
+                        Toast.LENGTH_LONG).show();
+                return;
+            } catch (Exception ignored) {
+                // 窗口不匹配时继续走选择流程
+            }
+        }
         Toast.makeText(this, "征服地图：请选择对应的世界地形 BIN 文件", Toast.LENGTH_LONG).show();
         Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         i.addCategory(Intent.CATEGORY_OPENABLE);
@@ -3021,7 +3753,8 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
     private void ensureBtlData() throws IOException {
         if (mapData.btlOriginalData != null) return;
         byte[] template = readAssetBytes("templates/stage10103.btl");
-        MapData conv = FileParser.createEmptyBtlFromTemplate(template,
+        // 用中立军团槽位转换，避免把地图国家替换成 stage10103 模板的那几个国家
+        MapData conv = FileParser.createEmptyBtlNeutral(template,
                 stripBtlExt(currentFileName) + ".btl", mapData.width, mapData.height);
         for (int i = 0; i < mapData.getTotalTiles(); i++) {
             conv.tiles.set(i, mapData.tiles.get(i));
@@ -3118,7 +3851,34 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         if(req==REQUEST_OPEN&&res==RESULT_OK&&data!=null&&data.getData()!=null){
             try{Uri uri=data.getData();FileInputStream fis=(FileInputStream)getContentResolver().openInputStream(uri);byte[] buf=new byte[fis.available()];fis.read(buf);fis.close();
                 String name=uri.getLastPathSegment();if(name!=null&&name.contains("/"))name=name.substring(name.lastIndexOf('/')+1);if(name==null)name="打开的文件";
+                // 当前已是征服 BTL、打开的是 BIN 时，把它当作该 BTL 的世界地形加载
+                if (mapData != null && mapData.btlOriginalData != null
+                        && name.toLowerCase().endsWith(".bin")) {
+                    FileParser.BtlHeaderInfo hi = FileParser.parseBTLHeader(mapData.btlOriginalData);
+                    if (!hi.independentTerrain) {
+                        try {
+                            FileParser.loadConquestTerrain(mapData, buf);
+                            mapData.binOriginalData = buf;
+                            mapData.binFileName = name;
+                            pendingWorldBin = buf;
+                            pendingWorldBinName = name;
+                            hexMapView.setMapData(mapData);
+                            hexMapView.refresh();
+                            updateInfo();
+                            selectedInfo.setText("已加载征服地形: " + name);
+                            Toast.makeText(this, "世界地形已加载，可像战役一样修改征服", Toast.LENGTH_LONG).show();
+                            return;
+                        } catch (Exception e) {
+                            Toast.makeText(this, "征服地形加载失败: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                            return;
+                        }
+                    }
+                }
                 mapData=FileParser.loadFile(buf,name);currentFileName=name;history.clear();if(mapData!=null)mapData.historyRef=history;
+                if (mapData != null && mapData.binOriginalData != null) {
+                    pendingWorldBin = mapData.binOriginalData;
+                    pendingWorldBinName = name;
+                }
                 hexMapView.setMapData(mapData);updateInfo();updateBtnState();
                 blockIdText.setText("未选中");selectedInfo.setText("已加载: "+name);
                 maybeLoadConquestBin();

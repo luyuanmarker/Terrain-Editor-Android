@@ -69,6 +69,41 @@ public class FileParser {
         return h;
     }
 
+    /** 事件段起始偏移：建筑 → 兵种 → 陷阱 → 方案 → 天气 → 事件（44字节/条）。 */
+    public static int eventStart(BtlHeaderInfo h) {
+        int cursor = h.buildingStart + h.buildingCount * 32;
+        cursor += h.armyCount * armyRecSize(h.version);
+        cursor += h.mineCount * 12;
+        cursor += h.planCount * 16;
+        cursor += h.weatherCount * 16;
+        return cursor;
+    }
+
+    /** 把编辑后的 128 字节主数据（头部）写回 BTL。 */
+    public static void patchHeader(MapData mapData, byte[] raw128) throws IOException {
+        if (mapData == null || mapData.btlOriginalData == null
+                || raw128 == null || raw128.length < 128) {
+            throw new IOException("主数据无效");
+        }
+        System.arraycopy(raw128, 0, mapData.btlOriginalData, 0, 128);
+    }
+
+    /** 把编辑后的 44 字节事件记录写回 BTL。 */
+    public static void patchEvent(MapData mapData, int index, byte[] raw44) throws IOException {
+        if (mapData == null || mapData.btlOriginalData == null
+                || raw44 == null || raw44.length < 44) {
+            throw new IOException("事件数据无效");
+        }
+        BtlHeaderInfo h = parseBTLHeader(mapData.btlOriginalData);
+        int start = eventStart(h);
+        int addr = start + index * 44;
+        int end = start + h.eventCount * 44;
+        if (index < 0 || addr + 44 > end || end > mapData.btlOriginalData.length) {
+            throw new IOException("事件记录越界");
+        }
+        System.arraycopy(raw44, 0, mapData.btlOriginalData, addr, 44);
+    }
+
     /** 兵种记录大小：版本1=48字节，版本2/3=64字节。 */
     private static int armyRecSize(int version) {
         return version == 1 ? 48 : 64;
@@ -79,11 +114,62 @@ public class FileParser {
         return version <= 2 ? 80 : 104;
     }
 
+    /**
+     * 检测该 BTL 坐标的存储约定：征服文件把省规划/建筑/兵种坐标存成“世界坐标”
+     * （地图本地坐标 + 截取偏移 captureY*宽+captureX）。
+     * 若截取偏移非 0，且省规划/建筑/兵种坐标普遍 >= 偏移、减去偏移后全部合法，
+     * 则判定为世界坐标并返回该偏移；否则返回 0（地图本地坐标）。
+     */
+    private static int detectCoordBase(byte[] data, BtlHeaderInfo h) {
+        int total = h.width * h.height;
+        int offset = h.captureY * h.width + h.captureX;
+        if (total <= 0 || offset <= 0) return 0;
+        int checked = 0, ok = 0;
+        // 省规划（2字节/格）
+        int adminStart = h.terrainStart + (h.independentTerrain ? total * 16 : 0);
+        for (int i = 0; i < total; i++) {
+            int addr = adminStart + i * 2;
+            if (addr + 2 > data.length) break;
+            int pv = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
+                    .getShort(addr) & 0xFFFF;
+            if (pv == 0 || pv == 0xFFFF) continue;
+            checked++;
+            if (pv >= offset && pv - offset < total) ok++;
+        }
+        // 建筑（32字节/条，坐标在 0x0）
+        for (int i = 0; i < h.buildingCount; i++) {
+            int addr = h.buildingStart + i * 32;
+            if (addr + 32 > data.length) break;
+            int coord = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
+                    .getShort(addr) & 0xFFFF;
+            if (coord == 0 || coord == 0xFFFF) continue;
+            checked++;
+            if (coord >= offset && coord - offset < total) ok++;
+        }
+        // 兵种（坐标在 0x0；type=0 为空占位）
+        int armyStart = h.buildingStart + h.buildingCount * 32;
+        int rec = armyRecSize(h.version);
+        for (int i = 0; i < h.armyCount; i++) {
+            int addr = armyStart + i * rec;
+            if (addr + rec > data.length) break;
+            int coord = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
+                    .getShort(addr) & 0xFFFF;
+            int type = data[addr + 2] & 0xFF;
+            if (type == 0 || coord == 0 || coord == 0xFFFF) continue;
+            checked++;
+            if (coord >= offset && coord - offset < total) ok++;
+        }
+        // 允许少量异常记录（5% 容差）
+        if (checked > 0 && ok >= checked - Math.max(1, checked / 20)) return offset;
+        return 0;
+    }
+
     private static MapData loadBTL(byte[] data, String fileName) throws IOException {
         BtlHeaderInfo header = parseBTLHeader(data);
         MapData mapData = new MapData(header.width, header.height);
         mapData.fileName = fileName;
         mapData.btlOriginalData = data;
+        mapData.coordBase = detectCoordBase(data, header);
 
         int totalTiles = header.width * header.height;
         if (header.independentTerrain) {
@@ -103,7 +189,9 @@ public class FileParser {
             for (int i = 0; i < header.buildingCount; i++) {
                 int addr = header.buildingStart + i * 32;
                 if (addr + 32 > data.length) break;
-                int coord = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN).getShort(addr) & 0xFFFF;
+                int coord = (ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
+                        .getShort(addr) & 0xFFFF) - mapData.coordBase;
+                if (coord < 0) continue;
                 int bx = coord % header.width;
                 int by = coord / header.width;
                 int type = data[addr + 4] & 0xFF;
@@ -117,14 +205,18 @@ public class FileParser {
 
     /** 解析军团颜色、军团归属与兵种列表（兵种段 48 字节/条）。 */
     private static void parseContentSections(MapData mapData, byte[] data, BtlHeaderInfo header) {
+        mapData.coordBase = detectCoordBase(data, header);
         int totalTiles = header.width * header.height;
         // 省规划（2字节/格）
         int adminStart = header.terrainStart + (header.independentTerrain ? totalTiles * 16 : 0);
         mapData.provinces = new int[totalTiles];
         for (int i = 0; i < totalTiles; i++) {
             if (adminStart + i * 2 + 2 <= data.length) {
-                mapData.provinces[i] = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
+                int pv = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
                         .getShort(adminStart + i * 2) & 0xFFFF;
+                // 征服文件省规划也是世界坐标：统一减掉截取偏移
+                mapData.provinces[i] = (pv == 0 || pv == 0xFFFF)
+                        ? pv : Math.max(0, pv - mapData.coordBase);
             }
         }
         int ownershipStart = header.buildingStart - totalTiles;
@@ -159,10 +251,12 @@ public class FileParser {
         for (int i = 0; i < header.armyCount; i++) {
             int addr = armyStart + i * recSize;
             if (addr + recSize > data.length) break;
-            int coord = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN).getShort(addr) & 0xFFFF;
+            int coord = (ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
+                    .getShort(addr) & 0xFFFF) - mapData.coordBase;
             int type = data[addr + 2] & 0xFF;
             // 兵种代码 0 = 空占位记录（坐标 0/0xFFFF、全字段为 0），不显示
             if (type == 0) continue;
+            if (coord < 0) continue;
             int level = data[addr + 3] & 0xFF;
             int ax = coord % header.width;
             int ay = coord / header.width;
@@ -181,8 +275,9 @@ public class FileParser {
         for (int i = 0; i < header.buildingCount; i++) {
             int addr = header.buildingStart + i * 32;
             if (addr + 32 > data.length) break;
-            int coord = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
-                    .getShort(addr) & 0xFFFF;
+            int coord = (ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
+                    .getShort(addr) & 0xFFFF) - mapData.coordBase;
+            if (coord < 0) continue;
             int type = data[addr + 4] & 0xFF;
             int bx = coord % header.width;
             int by = coord / header.width;
@@ -208,7 +303,8 @@ public class FileParser {
         }
         BtlHeaderInfo h = parseBTLHeader(mapData.btlOriginalData);
         int addr = h.buildingStart + b.index * 32;
-        if (addr + 32 > mapData.btlOriginalData.length) {
+        int sectionEnd = h.buildingStart + h.buildingCount * 32;
+        if (addr + 32 > sectionEnd || sectionEnd > mapData.btlOriginalData.length) {
             throw new IOException("城市记录越界");
         }
         System.arraycopy(raw32, 0, mapData.btlOriginalData, addr, 32);
@@ -216,9 +312,13 @@ public class FileParser {
         int oldTile = b.y * mapData.width + b.x;
         int coord = ByteBuffer.wrap(raw32).order(ByteOrder.LITTLE_ENDIAN)
                 .getShort(0) & 0xFFFF;
+        int mapCoord = coord - mapData.coordBase;
+        if (mapCoord < 0 || mapCoord >= mapData.getTotalTiles()) {
+            throw new IOException("城市坐标越界");
+        }
         int type = raw32[4] & 0xFF;
-        int nx = coord % mapData.width;
-        int ny = coord / mapData.width;
+        int nx = mapCoord % mapData.width;
+        int ny = mapCoord / mapData.width;
         int newTile = ny * mapData.width + nx;
         if (oldTile >= 0 && oldTile < mapData.buildingIds.size() && oldTile != newTile) {
             mapData.buildingIds.set(oldTile, 0);
@@ -244,7 +344,10 @@ public class FileParser {
         int recSize = armyRecSize(h.version);
         if (raw48 == null || raw48.length < recSize) throw new IOException("兵种记录无效");
         int addr = armyStart + army.index * recSize;
-        if (addr + recSize > mapData.btlOriginalData.length) throw new IOException("兵种记录越界");
+        int sectionEnd = armyStart + h.armyCount * recSize;
+        if (addr + recSize > sectionEnd || sectionEnd > mapData.btlOriginalData.length) {
+            throw new IOException("兵种记录越界");
+        }
         System.arraycopy(raw48, 0, mapData.btlOriginalData, addr, recSize);
     }
 
@@ -581,6 +684,101 @@ public class FileParser {
     }
 
     /**
+     * 从模板新建“中立”空战役：结构与 createEmptyBtlFromTemplate 一致（保留官方编辑器
+     * 所需的固定尾段），但军团段不再克隆 stage10103 模板的具体国家，只写两个通用空槽位。
+     * 用于 BIN→BTL 转换，避免转换后把地图的国家替换成模板的那几个国家。
+     */
+    public static MapData createEmptyBtlNeutral(byte[] template, String fileName,
+                                                int newWidth, int newHeight) throws IOException {
+        if (newWidth < 3 || newWidth > 200 || newHeight < 3 || newHeight > 200) {
+            throw new IOException("地图宽高范围为 3–200");
+        }
+        BtlHeaderInfo h = parseBTLHeader(template);
+        int oldTotal = h.width * h.height;
+        if (h.width <= 0 || h.height <= 0 || h.terrainStart + oldTotal * 16 > template.length) {
+            throw new IOException("BTL 模板结构不完整");
+        }
+
+        int newTotal = newWidth * newHeight;
+        int legionCount = 2; // 两个通用军团槽位，不携带模板的具体国家
+        int terrainStart = 128 + legionCount * 300;
+        int newAdminStart = terrainStart + newTotal * 16;
+        int newOwnershipStart = newAdminStart + newTotal * 2;
+        int newBuildingStart = newOwnershipStart + newTotal;
+        // 0x44 / 0x48 对应的固定尾段必须保留，否则官方编辑器无法建立主数据（黑屏）。
+        int fixedTailStart = h.buildingStart
+                + h.buildingCount * 32
+                + h.armyCount * armyRecSize(h.version)
+                + h.planCount * 16
+                + h.eventCount * 44
+                + h.weatherCount * 16
+                + h.reinforceCount * reinforceRecSize(h.version)
+                + h.airstrikeCount * 20
+                + h.mineCount * 12
+                + h.strategyCount * 16
+                + h.airSupportCount * 16;
+        if (fixedTailStart > template.length) throw new IOException("模板固定尾段越界");
+        byte[] result = new byte[newBuildingStart + (template.length - fixedTailStart)];
+
+        // 只复制 128 字节头部，不复制模板的军团段
+        System.arraycopy(template, 0, result, 0, 128);
+        ByteBuffer lb = ByteBuffer.wrap(result).order(ByteOrder.LITTLE_ENDIAN);
+        lb.putInt(0x18, legionCount);
+        lb.putInt(0x80, 1);       // 第一军团序号
+        lb.putInt(0x84, 1);       // 英国（游戏可识别的通用国家）
+        lb.putInt(0x80 + 300, 2); // 第二军团序号
+        lb.putInt(0x84 + 300, 3); // 德国
+
+        // 找到模板中实际使用的平原地块（BTL 中平原主地形组为 0）。
+        byte[] fillTile = new byte[16];
+        boolean foundPlain = false;
+        for (int i = 0; i < oldTotal; i++) {
+            int offset = h.terrainStart + i * 16;
+            if ((template[offset] & 0xFF) == 0
+                    && (template[offset + 1] & 0xFF) == 0xFF
+                    && (template[offset + 4] & 0xFF) == 0x3F
+                    && (template[offset + 5] & 0xFF) == 0xFF
+                    && (template[offset + 8] & 0xFF) == 0x3F
+                    && (template[offset + 9] & 0xFF) == 0xFF
+                    && template[offset + 2] == 0 && template[offset + 3] == 0
+                    && template[offset + 6] == 0 && template[offset + 7] == 0
+                    && template[offset + 10] == 0 && template[offset + 11] == 0
+                    && template[offset + 12] == 0 && template[offset + 13] == 0
+                    && template[offset + 14] == 0 && template[offset + 15] == 0) {
+                System.arraycopy(template, offset, fillTile, 0, 16);
+                foundPlain = true;
+                break;
+            }
+        }
+        if (!foundPlain) throw new IOException("模板中未找到平原地形记录");
+        for (int i = 0; i < newTotal; i++) {
+            System.arraycopy(fillTile, 0, result, terrainStart + i * 16, 16);
+            result[newAdminStart + i * 2] = 0;
+            result[newAdminStart + i * 2 + 1] = 0;
+            result[newOwnershipStart + i] = (byte) 0xFF;
+        }
+
+        ByteBuffer header = ByteBuffer.wrap(result).order(ByteOrder.LITTLE_ENDIAN);
+        header.putInt(0x10, newWidth);
+        header.putInt(0x14, newHeight);
+        header.putInt(0x58, newTotal);
+        header.putInt(0x1C, 0); // 建筑
+        header.putInt(0x20, 0); // 兵种
+        header.putInt(0x24, 0); // 方案
+        header.putInt(0x28, 0); // 事件
+        header.putInt(0x2C, 0); // 天气
+        header.putInt(0x3C, 0); // 援军
+        header.putInt(0x40, 0); // 空袭
+        header.putInt(0x68, 0); // 陷阱
+        header.putInt(0x70, 0); // 战略建设
+        header.putInt(0x7C, 0); // 空中支援
+
+        System.arraycopy(template, fixedTailStart, result, newBuildingStart,
+                template.length - fixedTailStart);
+        return loadBTL(result, fileName);
+    }
+
+    /**
      * 按统一的 BTL 业务段布局，把建筑段之后各记录段中的“地块索引”字段交给 remap 处理。
      * 段尺寸与顺序：建筑 32(由调用方处理) → 兵种 48 → 陷阱 12 → 方案 16 → 天气 16 → 事件 44
      *   → 援军 80 → 空袭 20 → 放置单位 8 → 首都 4 → 战略建设 16 → 空中支援 16
@@ -590,46 +788,50 @@ public class FileParser {
      *
      * @param base 建筑段在目标文件中的起始偏移（从建筑段之后开始遍历）
      */
-    public static void remapSectionTileIndexes(byte[] btl, int base, BtlHeaderInfo h, IntUnaryOperator remap) {
+    public static void remapSectionTileIndexes(byte[] btl, int base, BtlHeaderInfo h,
+                                               IntUnaryOperator remap, int coordBase) {
         int oldTotal = h.width * h.height;
         int cursor = base + h.buildingCount * 32;
 
         int armyRec = armyRecSize(h.version);
         int reinforceRec = reinforceRecSize(h.version);
-        remapSection(btl, cursor, h.armyCount, armyRec, 0, oldTotal, remap);
+        remapSection(btl, cursor, h.armyCount, armyRec, 0, oldTotal, remap, coordBase);
         cursor += h.armyCount * armyRec;
-        remapSection(btl, cursor, h.mineCount, 12, 0, oldTotal, remap);
+        remapSection(btl, cursor, h.mineCount, 12, 0, oldTotal, remap, coordBase);
         cursor += h.mineCount * 12;
-        remapSection(btl, cursor, h.planCount, 16, 12, oldTotal, remap); // 方案：目标地块在 0xC
+        remapSection(btl, cursor, h.planCount, 16, 12, oldTotal, remap, coordBase); // 方案：目标地块在 0xC
         cursor += h.planCount * 16;
         cursor += h.weatherCount * 16;  // 天气：无地块索引
         cursor += h.eventCount * 44;    // 事件：无地块索引
-        remapSection(btl, cursor, h.reinforceCount, reinforceRec, 0, oldTotal, remap);
+        remapSection(btl, cursor, h.reinforceCount, reinforceRec, 0, oldTotal, remap, coordBase);
         cursor += h.reinforceCount * reinforceRec;
-        remapSection(btl, cursor, h.airstrikeCount, 20, 0, oldTotal, remap);
+        remapSection(btl, cursor, h.airstrikeCount, 20, 0, oldTotal, remap, coordBase);
         cursor += h.airstrikeCount * 20;
         // 放置单位（0x44+0x48 计数）8字节/条：坐标在 0x0
-        remapSection(btl, cursor, h.placementCountA + h.placementCountB, 8, 0, oldTotal, remap);
+        remapSection(btl, cursor, h.placementCountA + h.placementCountB, 8, 0, oldTotal, remap, coordBase);
         cursor += (h.placementCountA + h.placementCountB) * 8;
         // 首都（0x4C 计数）4字节/条：坐标在 0x0
-        remapSection(btl, cursor, h.capitalCount, 4, 0, oldTotal, remap);
+        remapSection(btl, cursor, h.capitalCount, 4, 0, oldTotal, remap, coordBase);
         cursor += h.capitalCount * 4;
         cursor += h.strategyCount * 16;   // 战略建设：无地块索引
         cursor += h.airSupportCount * 16; // 空中支援：无地块索引
     }
 
     private static void remapSection(byte[] btl, int base, int count, int recordSize, int fieldOffset,
-                                     int oldTotal, IntUnaryOperator remap) {
+                                     int oldTotal, IntUnaryOperator remap, int coordBase) {
         if (count <= 0 || base < 0) return;
         for (int i = 0; i < count; i++) {
             int addr = base + i * recordSize;
             if (addr + fieldOffset + 2 > btl.length) break;
-            int idx = ByteBuffer.wrap(btl).order(ByteOrder.LITTLE_ENDIAN).getShort(addr + fieldOffset) & 0xFFFF;
+            int idx = (ByteBuffer.wrap(btl).order(ByteOrder.LITTLE_ENDIAN)
+                    .getShort(addr + fieldOffset) & 0xFFFF) - coordBase;
+            if (idx < 0) continue;
             if (idx > 0 && idx < oldTotal) {
                 int v = remap.applyAsInt(idx);
                 if (v < 0 || v > 0xFFFF) continue;
-                btl[addr + fieldOffset] = (byte) (v & 0xFF);
-                btl[addr + fieldOffset + 1] = (byte) ((v >>> 8) & 0xFF);
+                int stored = v + coordBase;
+                btl[addr + fieldOffset] = (byte) (stored & 0xFF);
+                btl[addr + fieldOffset + 1] = (byte) ((stored >>> 8) & 0xFF);
             }
         }
     }
@@ -665,7 +867,8 @@ public class FileParser {
         for (int i = 0; i < oldBuildingCount; i++) {
             int addr = oldBuildingStart + i * 32;
             if (addr + 32 > oldBtl.length) break;
-            int coord = ByteBuffer.wrap(oldBtl).order(ByteOrder.LITTLE_ENDIAN).getShort(addr) & 0xFFFF;
+            int coord = (ByteBuffer.wrap(oldBtl).order(ByteOrder.LITTLE_ENDIAN)
+                    .getShort(addr) & 0xFFFF) - mapData.coordBase;
             int bid = (coord >= 0 && coord < total) ? mapData.buildingIds.get(coord) : 0;
             if (bid <= 0 && (oldBtl[addr + 4] & 0xFF) == 0) newCount++;
         }
@@ -674,7 +877,8 @@ public class FileParser {
         for (int i = 0; i < oldBuildingCount; i++) {
             int addr = oldBuildingStart + i * 32;
             if (addr + 32 > oldBtl.length) break;
-            int coord = ByteBuffer.wrap(oldBtl).order(ByteOrder.LITTLE_ENDIAN).getShort(addr) & 0xFFFF;
+            int coord = (ByteBuffer.wrap(oldBtl).order(ByteOrder.LITTLE_ENDIAN)
+                    .getShort(addr) & 0xFFFF) - mapData.coordBase;
             oldRecordByTile.put(coord, addr);
         }
         int outIdx = 0;
@@ -682,7 +886,8 @@ public class FileParser {
         for (int i = 0; i < oldBuildingCount; i++) {
             int addr = oldBuildingStart + i * 32;
             if (addr + 32 > oldBtl.length) break;
-            int coord = ByteBuffer.wrap(oldBtl).order(ByteOrder.LITTLE_ENDIAN).getShort(addr) & 0xFFFF;
+            int coord = (ByteBuffer.wrap(oldBtl).order(ByteOrder.LITTLE_ENDIAN)
+                    .getShort(addr) & 0xFFFF) - mapData.coordBase;
             int bid = (coord >= 0 && coord < total) ? mapData.buildingIds.get(coord) : 0;
             if (bid > 0) {
                 System.arraycopy(oldBtl, addr, out, outIdx * 32, 32);
@@ -699,8 +904,9 @@ public class FileParser {
             int bid = mapData.buildingIds.get(i);
             if (bid <= 0 || oldRecordByTile.containsKey(i)) continue;
             int off = outIdx * 32;
-            out[off] = (byte) (i & 0xFF);
-            out[off + 1] = (byte) ((i >>> 8) & 0xFF);
+            int stored = i + mapData.coordBase;
+            out[off] = (byte) (stored & 0xFF);
+            out[off + 1] = (byte) ((stored >>> 8) & 0xFF);
             out[off + 4] = (byte) bid;
             outIdx++;
         }
@@ -774,12 +980,25 @@ public class FileParser {
                     }
                 }
             }
-            // 省规划（2字节/格）
+            // 省规划（2字节/格）：值是“省份代表地块坐标”，裁剪后重映射到新坐标
             for (int y = y1; y <= y2; y++) {
                 for (int x = x1; x <= x2; x++) {
                     int si = y * oldW + x;
-                    out.write(oldBtl[oldAdminStart + si * 2]);
-                    out.write(oldBtl[oldAdminStart + si * 2 + 1]);
+                    int oldPv = (oldBtl[oldAdminStart + si * 2] & 0xFF)
+                            | ((oldBtl[oldAdminStart + si * 2 + 1] & 0xFF) << 8);
+                    int npv = oldPv;
+                    if (oldPv != 0 && oldPv != 0xFFFF) {
+                        int cb = mapData.coordBase;
+                        int localPv = oldPv - cb;
+                        if (localPv >= 0 && localPv < oldTotal) {
+                            int px = localPv % oldW, py = localPv / oldW;
+                            if (px >= x1 && px < x1 + newW && py >= y1 && py < y1 + newH) {
+                                npv = (py - y1) * newW + (px - x1) + cb;
+                            }
+                        }
+                    }
+                    out.write(npv & 0xFF);
+                    out.write((npv >> 8) & 0xFF);
                 }
             }
             // 军团归属（1字节/格）
@@ -798,30 +1017,30 @@ public class FileParser {
             int reinforceRec = reinforceRecSize(h.version);
             int[] armyKept = {0};
             cursor = cropCoordSection(out, oldBtl, cursor, h.armyCount, armyRec, 0,
-                    oldW, x1, y1, newW, newH, oldTotal, false, armyKept);
+                    oldW, x1, y1, newW, newH, oldTotal, false, armyKept, mapData.coordBase);
             int[] mineKept = {0};
             cursor = cropCoordSection(out, oldBtl, cursor, h.mineCount, 12, 0,
-                    oldW, x1, y1, newW, newH, oldTotal, false, mineKept);
+                    oldW, x1, y1, newW, newH, oldTotal, false, mineKept, mapData.coordBase);
             int[] planKept = {0};
             cursor = cropCoordSection(out, oldBtl, cursor, h.planCount, 16, 12,
-                    oldW, x1, y1, newW, newH, oldTotal, true, planKept);
+                    oldW, x1, y1, newW, newH, oldTotal, true, planKept, mapData.coordBase);
             cursor = copySection(out, oldBtl, cursor, h.weatherCount, 16);
             cursor = copySection(out, oldBtl, cursor, h.eventCount, 44);
             int[] reinfKept = {0};
             cursor = cropCoordSection(out, oldBtl, cursor, h.reinforceCount, reinforceRec, 0,
-                    oldW, x1, y1, newW, newH, oldTotal, false, reinfKept);
+                    oldW, x1, y1, newW, newH, oldTotal, false, reinfKept, mapData.coordBase);
             int[] airKept = {0};
             cursor = cropCoordSection(out, oldBtl, cursor, h.airstrikeCount, 20, 0,
-                    oldW, x1, y1, newW, newH, oldTotal, false, airKept);
+                    oldW, x1, y1, newW, newH, oldTotal, false, airKept, mapData.coordBase);
             int[] placeAKept = {0};
             cursor = cropCoordSection(out, oldBtl, cursor, h.placementCountA, 8, 0,
-                    oldW, x1, y1, newW, newH, oldTotal, false, placeAKept);
+                    oldW, x1, y1, newW, newH, oldTotal, false, placeAKept, mapData.coordBase);
             int[] placeBKept = {0};
             cursor = cropCoordSection(out, oldBtl, cursor, h.placementCountB, 8, 0,
-                    oldW, x1, y1, newW, newH, oldTotal, false, placeBKept);
+                    oldW, x1, y1, newW, newH, oldTotal, false, placeBKept, mapData.coordBase);
             int[] capKept = {0};
             cursor = cropCoordSection(out, oldBtl, cursor, h.capitalCount, 4, 0,
-                    oldW, x1, y1, newW, newH, oldTotal, false, capKept);
+                    oldW, x1, y1, newW, newH, oldTotal, false, capKept, mapData.coordBase);
             cursor = copySection(out, oldBtl, cursor, h.strategyCount, 16);
             copySection(out, oldBtl, cursor, h.airSupportCount, 16);
 
@@ -874,11 +1093,14 @@ public class FileParser {
      */
     private static int cropCoordSection(java.io.ByteArrayOutputStream out, byte[] src, int base, int count,
                                         int recSize, int fieldOffset, int oldW, int x1, int y1,
-                                        int newW, int newH, int oldTotal, boolean keepZero, int[] kept) {
+                                        int newW, int newH, int oldTotal, boolean keepZero, int[] kept,
+                                        int coordBase) {
         for (int i = 0; i < count; i++) {
             int addr = base + i * recSize;
             if (addr + recSize > src.length) break;
-            int coord = ByteBuffer.wrap(src).order(ByteOrder.LITTLE_ENDIAN).getShort(addr + fieldOffset) & 0xFFFF;
+            int coord = (ByteBuffer.wrap(src).order(ByteOrder.LITTLE_ENDIAN)
+                    .getShort(addr + fieldOffset) & 0xFFFF) - coordBase;
+            if (coord < 0) continue;
             if (keepZero && coord == 0) {
                 out.write(src, addr, recSize);
                 if (kept != null) kept[0]++;
@@ -890,8 +1112,9 @@ public class FileParser {
                 int nc = (y - y1) * newW + (x - x1);
                 byte[] rec = new byte[recSize];
                 System.arraycopy(src, addr, rec, 0, recSize);
-                rec[fieldOffset] = (byte) (nc & 0xFF);
-                rec[fieldOffset + 1] = (byte) ((nc >> 8) & 0xFF);
+                int stored = nc + coordBase;
+                rec[fieldOffset] = (byte) (stored & 0xFF);
+                rec[fieldOffset + 1] = (byte) ((stored >> 8) & 0xFF);
                 out.write(rec, 0, recSize);
                 if (kept != null) kept[0]++;
             }
@@ -906,15 +1129,18 @@ public class FileParser {
         for (int i = 0; i < count; i++) {
             int addr = base + i * 32;
             if (addr + 32 > src.length) break;
-            int coord = ByteBuffer.wrap(src).order(ByteOrder.LITTLE_ENDIAN).getShort(addr) & 0xFFFF;
+            int coord = (ByteBuffer.wrap(src).order(ByteOrder.LITTLE_ENDIAN)
+                    .getShort(addr) & 0xFFFF) - mapData.coordBase;
+            if (coord < 0) continue;
             if (coord >= oldTotal) continue;
             int x = coord % oldW, y = coord / oldW;
             if (x >= x1 && x < x1 + newW && y >= y1 && y < y1 + newH) {
                 byte[] rec = new byte[32];
                 System.arraycopy(src, addr, rec, 0, 32);
                 int nc = (y - y1) * newW + (x - x1);
-                rec[0] = (byte) (nc & 0xFF);
-                rec[1] = (byte) ((nc >> 8) & 0xFF);
+                int stored = nc + mapData.coordBase;
+                rec[0] = (byte) (stored & 0xFF);
+                rec[1] = (byte) ((stored >> 8) & 0xFF);
                 int bid = mapData.buildingIds.get((y - y1) * newW + (x - x1));
                 if (bid > 0) rec[4] = (byte) bid;
                 out.write(rec, 0, 32);
