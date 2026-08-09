@@ -16,9 +16,27 @@ public class FileParser {
         ByteBuffer bb = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
         int first = bb.getInt(0);
         if (first >= 1 && first <= 3) return loadBTL(data, fileName);
-        int w = bb.getInt(8), h = bb.getInt(12);
-        if (w > 0 && w <= 200 && h > 0 && h <= 200) return loadBIN(data, fileName);
+        if (binDims(data) != null) return loadBIN(data, fileName);
         throw new IOException("无法识别的文件格式");
+    }
+
+    /**
+     * 解析世界地形 BIN 的尺寸与头部长度：优先 YSAE 魔数（宽高在 0x8/0xC，16 字节头），
+     * 兼容裸格式（宽高在 0x0/0x4，8 字节头）。与 HTML 版转换器的加载规则一致。
+     * 返回 {宽度, 高度, 头部长度}；无法识别时返回 null。
+     */
+    private static int[] binDims(byte[] data) {
+        if (data == null || data.length < 16) return null;
+        ByteBuffer bb = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
+        boolean ySAE = data[0] == 'Y' && data[1] == 'S' && data[2] == 'A' && data[3] == 'E';
+        if (ySAE) {
+            int w = bb.getInt(8), h = bb.getInt(12);
+            if (w > 0 && w <= 2000 && h > 0 && h <= 2000) return new int[]{w, h, 16};
+            return null;
+        }
+        int w0 = bb.getInt(0), h0 = bb.getInt(4);
+        if (w0 > 0 && w0 <= 2000 && h0 > 0 && h0 <= 2000) return new int[]{w0, h0, 8};
+        return null;
     }
 
     // ========= BTL =========
@@ -1151,14 +1169,15 @@ public class FileParser {
     // ========= BIN =========
 
     private static MapData loadBIN(byte[] data, String fileName) throws IOException {
-        ByteBuffer bb = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
-        int width = bb.getInt(8), height = bb.getInt(12);
+        int[] dims = binDims(data);
+        if (dims == null) throw new IOException("BIN 地形数据不完整");
+        int width = dims[0], height = dims[1], headerSize = dims[2];
         MapData mapData = new MapData(width, height);
         mapData.fileName = fileName;
         mapData.binOriginalData = data;
         int totalTiles = width * height;
         for (int i = 0; i < totalTiles; i++) {
-            int addr = 16 + i * 16;
+            int addr = headerSize + i * 16;
             if (addr + 16 > data.length) break;
             mapData.tiles.get(i).parseFromBytes(data, addr);
         }
@@ -1171,9 +1190,10 @@ public class FileParser {
         if (mapData.binOriginalData != null) {
             // 世界地形 BIN：保留头 16 字节与地形之后的省规划段，仅原地更新截取区域的地形
             byte[] bin = mapData.binOriginalData.clone();
-            ByteBuffer bb = ByteBuffer.wrap(bin).order(ByteOrder.LITTLE_ENDIAN);
-            int binW = bb.getInt(8), binH = bb.getInt(12);
-            if (binW <= 0 || binH <= 0 || 16 + binW * binH * 16 > bin.length) {
+            int[] dims = binDims(mapData.binOriginalData);
+            if (dims == null) throw new IOException("BIN 地形数据不完整");
+            int binW = dims[0], binH = dims[1], headerSize = dims[2];
+            if (binW <= 0 || binH <= 0 || headerSize + binW * binH * 16 > bin.length) {
                 throw new IOException("BIN 地形数据不完整");
             }
             int cropX = 0, cropY = 0;
@@ -1187,7 +1207,7 @@ public class FileParser {
             }
             for (int y = 0; y < mapData.height; y++) {
                 for (int x = 0; x < mapData.width; x++) {
-                    int dst = 16 + ((y + cropY) * binW + (x + cropX)) * 16;
+                    int dst = headerSize + ((y + cropY) * binW + (x + cropX)) * 16;
                     mapData.tiles.get(y * mapData.width + x).toBytes(bin, dst);
                 }
             }
@@ -1215,9 +1235,10 @@ public class FileParser {
         BtlHeaderInfo h = parseBTLHeader(mapData.btlOriginalData);
         if (h.independentTerrain) throw new IOException("该 BTL 自带地形，无需 BIN");
         if (binData == null || binData.length < 16) throw new IOException("BIN 文件无效");
-        ByteBuffer bb = ByteBuffer.wrap(binData).order(ByteOrder.LITTLE_ENDIAN);
-        int binW = bb.getInt(8), binH = bb.getInt(12);
-        if (binW <= 0 || binH <= 0 || 16 + binW * binH * 16 > binData.length) {
+        int[] dims = binDims(binData);
+        if (dims == null) throw new IOException("BIN 地形数据不完整");
+        int binW = dims[0], binH = dims[1], headerSize = dims[2];
+        if (binW <= 0 || binH <= 0 || headerSize + binW * binH * 16 > binData.length) {
             throw new IOException("BIN 地形数据不完整");
         }
         if (h.captureX < 0 || h.captureY < 0
@@ -1226,10 +1247,176 @@ public class FileParser {
         }
         for (int y = 0; y < h.height; y++) {
             for (int x = 0; x < h.width; x++) {
-                int src = 16 + ((y + h.captureY) * binW + (x + h.captureX)) * 16;
+                int src = headerSize + ((y + h.captureY) * binW + (x + h.captureX)) * 16;
                 mapData.tiles.get(y * h.width + x).parseFromBytes(binData, src);
             }
         }
         mapData.buildTerrainPatterns();
+    }
+
+    /**
+     * 扩展征服地图（官方 MapEdit 的扩展逻辑）：
+     * - 世界底图 BIN 与截取窗口同步扩大，新地块按官方 getOneMapBin 填充（纯陆地组0/id255 或纯海洋组1/id0，
+     *   装饰 63/255、水/路边缘 0）；
+     * - 上/左扩展在窗口边缘插入，下/右扩展在底部/右侧追加；省规划、归属、建筑、兵种、事件等
+     *   坐标按新布局重映射（coordBase 同步更新）；
+     * - 扩展后按官方 checkCoast 全图重算海岸线。
+     *
+     * @param dir 0=向上 1=向下 2=向左 3=向右
+     */
+    public static MapData extendConquest(MapData mapData, int dir, int n, boolean ifLand) throws IOException {
+        if (mapData == null || mapData.binOriginalData == null) throw new IOException("未加载世界地形 BIN");
+        if (n < 1 || n > 50) throw new IOException("扩展数量范围为 1~50");
+        int[] dims = binDims(mapData.binOriginalData);
+        if (dims == null) throw new IOException("BIN 数据无效");
+        int binW = dims[0], binH = dims[1], headerSize = dims[2];
+        int newBinW = binW + ((dir == 2 || dir == 3) ? n : 0);
+        int newBinH = binH + ((dir == 0 || dir == 1) ? n : 0);
+        if (newBinW > 2000 || newBinH > 2000) throw new IOException("扩展后地图过大");
+
+        // 官方 getOneMapBin 填充块：陆地=组0/id255，海洋=组1/id0，装饰63/255，水/路边缘0
+        byte[] fill = new byte[16];
+        TerrainTile ft = new TerrainTile();
+        if (ifLand) { ft.bmTerrain1Group = 0; ft.bmTerrain1Id = 0xFF; }
+        else { ft.bmTerrain1Group = 1; ft.bmTerrain1Id = 0; }
+        ft.bmTerrain1X = 0; ft.bmTerrain1Y = 0;
+        ft.decoration1Group = 63; ft.decoration1Id = 255; ft.decoration1X = 0; ft.decoration1Y = 0;
+        ft.decoration2Group = 63; ft.decoration2Id = 255; ft.decoration2X = 0; ft.decoration2Y = 0;
+        ft.floorGroup = 0; ft.floorId = 0; ft.floorX = 0; ft.floorY = 0;
+        ft.toBytes(fill, 0);
+
+        byte[] oldBin = mapData.binOriginalData;
+        int oldProvStart = headerSize + binW * binH * 16;
+        boolean oldHasProv = oldBin.length >= oldProvStart + binW * binH * 2;
+        int newProvStart = headerSize + newBinW * newBinH * 16;
+        byte[] newBin = new byte[headerSize + newBinW * newBinH * 16 + newBinW * newBinH * 2];
+        System.arraycopy(oldBin, 0, newBin, 0, headerSize);
+        ByteBuffer binHdr = ByteBuffer.wrap(newBin).order(ByteOrder.LITTLE_ENDIAN);
+        if (headerSize == 16) { binHdr.putInt(8, newBinW); binHdr.putInt(12, newBinH); }
+        else { binHdr.putInt(0, newBinW); binHdr.putInt(4, newBinH); }
+
+        // 官方扩展位置：上=整图顶部插入 n 行，左=左列插入 n 列，下=底部追加，右=右侧追加
+        for (int by = 0; by < newBinH; by++) {
+            for (int bx = 0; bx < newBinW; bx++) {
+                int dst = headerSize + (by * newBinW + bx) * 16;
+                int ox = bx, oy = by;
+                boolean isFill = false;
+                switch (dir) {
+                    case 0: if (by < n) isFill = true; else oy = by - n; break;
+                    case 1: if (by >= binH) isFill = true; break;
+                    case 2: if (bx < n) isFill = true; else ox = bx - n; break;
+                    default: if (bx >= binW) isFill = true; break;
+                }
+                if (isFill) {
+                    System.arraycopy(fill, 0, newBin, dst, 16);
+                } else if (ox >= 0 && ox < binW && oy >= 0 && oy < binH) {
+                    System.arraycopy(oldBin, headerSize + (oy * binW + ox) * 16, newBin, dst, 16);
+                } else {
+                    System.arraycopy(fill, 0, newBin, dst, 16);
+                }
+            }
+        }
+        // 省规划段（官方 map 格式）：新地块 65535，旧地块按位移取回原值
+        for (int by = 0; by < newBinH; by++) {
+            for (int bx = 0; bx < newBinW; bx++) {
+                int pDst = newProvStart + (by * newBinW + bx) * 2;
+                int ox = bx, oy = by;
+                boolean isFill = false;
+                switch (dir) {
+                    case 0: if (by < n) isFill = true; else oy = by - n; break;
+                    case 1: if (by >= binH) isFill = true; break;
+                    case 2: if (bx < n) isFill = true; else ox = bx - n; break;
+                    default: if (bx >= binW) isFill = true; break;
+                }
+                if (isFill) {
+                    newBin[pDst] = (byte) 0xFF; newBin[pDst + 1] = (byte) 0xFF;
+                } else if (ox >= 0 && ox < binW && oy >= 0 && oy < binH && oldHasProv) {
+                    int pSrc = oldProvStart + (oy * binW + ox) * 2;
+                    newBin[pDst] = oldBin[pSrc]; newBin[pDst + 1] = oldBin[pSrc + 1];
+                } else {
+                    newBin[pDst] = (byte) 0xFF; newBin[pDst + 1] = (byte) 0xFF;
+                }
+            }
+        }
+        mapData.binOriginalData = newBin;
+
+        // 官方 checkCoast：对整张底图重算海岸线（海面按掩码查表补波浪，陆地清波浪）
+        MapData coastMap = new MapData(newBinW, newBinH);
+        for (int i = 0; i < newBinW * newBinH; i++) {
+            coastMap.tiles.get(i).parseFromBytes(newBin, headerSize + i * 16);
+        }
+        coastMap.recomputeCoastAll();
+        for (int i = 0; i < newBinW * newBinH; i++) {
+            coastMap.tiles.get(i).toBytes(newBin, headerSize + i * 16);
+        }
+
+        // 官方模式：不修改任何 BTL。编辑器切换到“整张世界地图”视图，让用户直接看到扩展后的地形
+        int full = newBinW * newBinH;
+        mapData.width = newBinW;
+        mapData.height = newBinH;
+        mapData.tiles = new java.util.ArrayList<>(full);
+        mapData.buildingIds = new java.util.ArrayList<>(full);
+        mapData.sampledColors = new java.util.ArrayList<>(full);
+        mapData.provinces = new int[full];
+        mapData.belongs = new byte[full];
+        for (int i = 0; i < full; i++) {
+            TerrainTile t = new TerrainTile();
+            t.parseFromBytes(newBin, headerSize + i * 16);
+            mapData.tiles.add(t);
+            mapData.buildingIds.add(0);
+            mapData.sampledColors.add(0);
+            int pv = (newBin[newProvStart + i * 2] & 0xFF)
+                    | ((newBin[newProvStart + i * 2 + 1] & 0xFF) << 8);
+            mapData.provinces[i] = pv;
+            mapData.belongs[i] = (byte) 0xFF;
+        }
+        mapData.selectedBlocks.clear();
+        mapData.editedCells.clear();
+        mapData.buildTerrainPatterns();
+        mapData.conquestExtended = true; // 官方模式：保存时仅输出 world.bin，绝不生成 BTL
+        return mapData;
+    }
+
+    /** 征服扩展：重映射建筑段之后所有含地块索引的记录段（oldBase -> newBase）。 */
+    private static void remapConquestSections(byte[] btl, int base, BtlHeaderInfo h,
+                                              int[] newIndexOfOld, int oldTotal,
+                                              int oldBase, int newBase) {
+        int cursor = base + h.buildingCount * 32;
+        int armyRec = armyRecSize(h.version);
+        int reinforceRec = reinforceRecSize(h.version);
+        remapTwoBase(btl, cursor, h.armyCount, armyRec, 0, oldTotal, newIndexOfOld, oldBase, newBase);
+        cursor += h.armyCount * armyRec;
+        remapTwoBase(btl, cursor, h.mineCount, 12, 0, oldTotal, newIndexOfOld, oldBase, newBase);
+        cursor += h.mineCount * 12;
+        remapTwoBase(btl, cursor, h.planCount, 16, 12, oldTotal, newIndexOfOld, oldBase, newBase);
+        cursor += h.planCount * 16;
+        cursor += h.weatherCount * 16;
+        cursor += h.eventCount * 44;
+        remapTwoBase(btl, cursor, h.reinforceCount, reinforceRec, 0, oldTotal, newIndexOfOld, oldBase, newBase);
+        cursor += h.reinforceCount * reinforceRec;
+        remapTwoBase(btl, cursor, h.airstrikeCount, 20, 0, oldTotal, newIndexOfOld, oldBase, newBase);
+        cursor += h.airstrikeCount * 20;
+        remapTwoBase(btl, cursor, h.placementCountA + h.placementCountB, 8, 0, oldTotal, newIndexOfOld, oldBase, newBase);
+        cursor += (h.placementCountA + h.placementCountB) * 8;
+        remapTwoBase(btl, cursor, h.capitalCount, 4, 0, oldTotal, newIndexOfOld, oldBase, newBase);
+    }
+
+    private static void remapTwoBase(byte[] btl, int base, int count, int recSize, int fieldOffset,
+                                     int oldTotal, int[] newIndexOfOld, int oldBase, int newBase) {
+        if (count <= 0 || base < 0) return;
+        for (int i = 0; i < count; i++) {
+            int addr = base + i * recSize;
+            if (addr + fieldOffset + 2 > btl.length) break;
+            int raw = (ByteBuffer.wrap(btl).order(ByteOrder.LITTLE_ENDIAN)
+                    .getShort(addr + fieldOffset) & 0xFFFF);
+            if (raw == 0 || raw == 0xFFFF) continue;
+            int lp = raw - oldBase;
+            if (lp < 0 || lp >= oldTotal) continue;
+            int nLocal = newIndexOfOld[lp];
+            if (nLocal < 0 || nLocal > 0xFFFF - newBase) continue;
+            int stored = nLocal + newBase;
+            btl[addr + fieldOffset] = (byte) (stored & 0xFF);
+            btl[addr + fieldOffset + 1] = (byte) ((stored >>> 8) & 0xFF);
+        }
     }
 }

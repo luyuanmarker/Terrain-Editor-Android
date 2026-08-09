@@ -90,6 +90,9 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
     /** 最近打开过的世界地形 BIN：先开 BIN 再开征服 BTL 时自动匹配，无需重复选择。 */
     private byte[] pendingWorldBin;
     private String pendingWorldBinName;
+    /** 最近打开过的世界地形 BIN（名称→数据，最多保留 4 个），按 HTML 版转换器的匹配规则自动关联征服底图。 */
+    private final java.util.LinkedHashMap<String, byte[]> recentWorldBins = new java.util.LinkedHashMap<>();
+    private static final int MAX_RECENT_WORLD_BINS = 4;
     private OperationHistory history = new OperationHistory();
     private String currentFileName = "未命名地图";
     // 截取模式：起点 -> 终点 -> 已框选（确认保存 / 取消）
@@ -2138,14 +2141,29 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
                 }
                 TerrainTile fill = fillSpinner.getSelectedItemPosition() == 0
                         ? makeFillTile(true) : makeFillTile(false);
-                expandMapGeneric(mapData, newW, newH, remap, fill);
+                if (mapData.binOriginalData != null) {
+                    // 征服地图：官方逻辑扩展世界底图 + 截取窗口 + 坐标重映射 + 海岸线
+                    boolean ifLand = fillSpinner.getSelectedItemPosition() == 1;
+                    FileParser.extendConquest(mapData, dir, n, ifLand);
+                    history.clear(); // 视图已切换为整张世界地图，旧撤销栈尺寸不匹配
+                } else {
+                    expandMapGeneric(mapData, newW, newH, remap, fill);
+                }
                 hexMapView.setMapData(mapData);
                 hexMapView.refresh();
                 updateInfo();
                 final String[] names = {"向上", "向下", "向左", "向右"};
-                currentFileName = names[dir] + "扩展" + n + (rows ? "行" : "列") + "_"
-                        + newW + "x" + newH + ".btl";
-                Toast.makeText(this, "已" + names[dir] + "扩展 " + n + (rows ? " 行" : " 列"),
+                if (mapData.conquestExtended) {
+                    // 官方模式：输出文件就是世界底图本身，不产生任何 BTL
+                    currentFileName = (mapData.binFileName != null && !mapData.binFileName.isEmpty())
+                            ? mapData.binFileName : "world.bin";
+                } else {
+                    currentFileName = names[dir] + "扩展" + n + (rows ? "行" : "列") + "_"
+                            + newW + "x" + newH + ".btl";
+                }
+                String extra = mapData.binOriginalData != null
+                        ? "（官方模式：仅扩展世界底图，保存时只输出 world.bin）" : "";
+                Toast.makeText(this, "已" + names[dir] + "扩展 " + n + (rows ? " 行" : " 列") + extra,
                         Toast.LENGTH_LONG).show();
             } catch (Exception ex) {
                 Toast.makeText(this, "扩展出错: " + ex.getMessage(), Toast.LENGTH_LONG).show();
@@ -2590,6 +2608,8 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
                     if (pat != null) mapData.getTile(x, y).parseFromBytes(pat, 0);
                     else mapData.getTile(x, y).setTerrain(g);
                     mapData.editedCells.add(y * mapData.width + x);
+                    // 涂地后处理被涂格子：陆地按位置选真实变体
+                    mapData.finishPaint(java.util.Collections.singleton(y * mapData.width + x));
                     hexMapView.refresh(); updateInfo();
                 } else {
                     Toast.makeText(this, "请先点击地图上的格子", Toast.LENGTH_SHORT).show();
@@ -3635,8 +3655,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
                         FileParser.loadConquestTerrain(mapData, d);
                         mapData.binOriginalData = d;
                         mapData.binFileName = f.getName();
-                        pendingWorldBin = d;
-                        pendingWorldBinName = f.getName();
+                        rememberWorldBin(f.getName(), d);
                         hexMapView.setMapData(mapData);
                         hexMapView.refresh();
                         updateInfo();
@@ -3655,8 +3674,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
             if (mapData != null) mapData.historyRef = history;
             // 记住刚打开的世界地形 BIN，供后续征服 BTL 自动匹配
             if (mapData.binOriginalData != null) {
-                pendingWorldBin = mapData.binOriginalData;
-                pendingWorldBinName = f.getName();
+                rememberWorldBin(f.getName(), mapData.binOriginalData);
             }
             hexMapView.setMapData(mapData);
             updateInfo();
@@ -3669,27 +3687,32 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         }
     }
 
-    /** 加载的 BTL 若为征服地图（地图序号!=0，地形在 world BIN 中），提示选择 BIN。 */
+    /** 加载的 BTL 若为征服地图（地图序号!=0，地形在 world BIN 中），自动匹配底图或提示选择 BIN。 */
     private void maybeLoadConquestBin() {
         if (mapData == null || mapData.btlOriginalData == null) return;
         FileParser.BtlHeaderInfo hi = FileParser.parseBTLHeader(mapData.btlOriginalData);
         if (hi.independentTerrain) return;
-        // 若最近打开过世界地形 BIN 且窗口匹配，直接自动加载，不再弹窗
-        if (pendingWorldBin != null) {
+        String mapId = String.valueOf(hi.mapId);
+        // 与 HTML 版转换器一致：world/worldmap 优先，其次 map{id} 精确名，最后其他候选；
+        // 按优先级逐个尝试，截取窗口匹配的第一个即自动加载，不再弹窗
+        java.util.List<java.util.Map.Entry<String, byte[]>> candidates =
+                new java.util.ArrayList<>(recentWorldBins.entrySet());
+        candidates.sort((a, b) -> Integer.compare(
+                scoreWorldBinName(a.getKey(), mapId), scoreWorldBinName(b.getKey(), mapId)));
+        for (java.util.Map.Entry<String, byte[]> e : candidates) {
             try {
-                FileParser.loadConquestTerrain(mapData, pendingWorldBin);
-                mapData.binOriginalData = pendingWorldBin;
-                mapData.binFileName = pendingWorldBinName;
+                FileParser.loadConquestTerrain(mapData, e.getValue());
+                mapData.binOriginalData = e.getValue();
+                mapData.binFileName = e.getKey();
                 hexMapView.setMapData(mapData);
                 hexMapView.refresh();
                 updateInfo();
-                selectedInfo.setText("已自动匹配世界地形: "
-                        + (pendingWorldBinName == null ? "world.bin" : pendingWorldBinName));
-                Toast.makeText(this, "已自动匹配最近打开的世界地形，可像战役一样修改征服",
+                selectedInfo.setText("已自动匹配世界地形: " + e.getKey());
+                Toast.makeText(this, "已自动匹配世界地形 " + e.getKey() + "，可像战役一样修改征服",
                         Toast.LENGTH_LONG).show();
                 return;
             } catch (Exception ignored) {
-                // 窗口不匹配时继续走选择流程
+                // 截取窗口不匹配，尝试下一个候选
             }
         }
         Toast.makeText(this, "征服地图：请选择对应的世界地形 BIN 文件", Toast.LENGTH_LONG).show();
@@ -3697,6 +3720,30 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         i.addCategory(Intent.CATEGORY_OPENABLE);
         i.setType("*/*");
         startActivityForResult(i, REQUEST_CONQUEST_BIN);
+    }
+
+    /** 底图候选优先级：world.bin/worldmap.bin=0，map{id}*.bin=1，其余=2（越小越优先）。 */
+    private int scoreWorldBinName(String name, String mapId) {
+        String n = (name == null ? "" : name).toLowerCase();
+        if (n.equals("world.bin") || n.equals("worldmap.bin")) return 0;
+        if (n.equals("map" + mapId + ".bin")
+                || n.equals("map" + mapId + "_hd.bin")
+                || n.equals("map" + mapId + "@2x.bin")) return 1;
+        return 2;
+    }
+
+    /** 记住最近打开的世界地形 BIN，供征服 BTL 自动匹配（最多保留 4 个）。 */
+    private void rememberWorldBin(String name, byte[] data) {
+        if (data == null) return;
+        String key = (name == null || name.isEmpty()) ? "world.bin" : name;
+        recentWorldBins.remove(key);
+        recentWorldBins.put(key, data);
+        while (recentWorldBins.size() > MAX_RECENT_WORLD_BINS) {
+            String oldest = recentWorldBins.keySet().iterator().next();
+            recentWorldBins.remove(oldest);
+        }
+        pendingWorldBin = data;
+        pendingWorldBinName = key;
     }
 
     private void saveFile() {
@@ -3778,6 +3825,21 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
 
     private void doSave(String dirPath) {
         try{
+            // 官方模式（征服扩展后）：与官方“地图编辑器”完全一致——只输出世界底图 world.bin，绝不生成任何 BTL
+            if (mapData.conquestExtended && mapData.binOriginalData != null) {
+                byte[] binData = mapData.binOriginalData; // 扩展时已重建完整官方格式底图
+                String binName = (mapData.binFileName != null && !mapData.binFileName.isEmpty())
+                        ? mapData.binFileName : "world.bin";
+                File dir = new File(dirPath);
+                if (!dir.exists()) dir.mkdirs();
+                File binOut = new File(dir, binName);
+                FileOutputStream bos = new FileOutputStream(binOut);
+                bos.write(binData);
+                bos.close();
+                Toast.makeText(this, "✅ 已生成文件（官方模式，仅输出底图）：\n"
+                        + binName + "\n位置：" + dir.getAbsolutePath(), Toast.LENGTH_LONG).show();
+                return;
+            }
             String fileName = currentFileName;
             if (!fileName.toLowerCase().endsWith(".btl") && !fileName.toLowerCase().endsWith(".bin")) {
                 fileName = fileName + ".btl";
@@ -3787,6 +3849,12 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
             // 保存为 BTL 但数据不是 BTL（如 BIN 文件起了 .btl 后缀）：先转换为标准 BTL
             if (isBTL && mapData.btlOriginalData == null) {
                 ensureBtlData();
+            }
+            // 征服 BTL 不含地形：未加载世界地形 BIN 时提示，避免误以为地形改动已保存
+            if (isBTL && mapData.btlOriginalData != null && mapData.binOriginalData == null
+                    && !FileParser.parseBTLHeader(mapData.btlOriginalData).independentTerrain) {
+                Toast.makeText(this, "⚠️ 征服 BTL 不含地形，未加载世界地形 BIN，地形改动不会保存",
+                        Toast.LENGTH_LONG).show();
             }
             byte[] data = isBTL ? FileParser.saveAsBTL(mapData) : FileParser.saveAsBIN(mapData);
             File dir = new File(dirPath);
@@ -3804,8 +3872,10 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
                 FileOutputStream bos = new FileOutputStream(binOut);
                 bos.write(binData);
                 bos.close();
-                Toast.makeText(this, "✅ 已保存 BTL 与地形 " + binOut.getName() + " 到: "
-                        + dir.getAbsolutePath(), Toast.LENGTH_LONG).show();
+                Toast.makeText(this, "✅ 已生成文件：\n" + outFile.getName() + "\n"
+                        + binOut.getName() + "\n位置：" + dir.getAbsolutePath(),
+                        Toast.LENGTH_LONG).show();
+                return;
             }
             Toast.makeText(this,"✅ 已保存到: " + outFile.getAbsolutePath(),Toast.LENGTH_LONG).show();
         }catch(Exception e){
@@ -3860,8 +3930,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
                             FileParser.loadConquestTerrain(mapData, buf);
                             mapData.binOriginalData = buf;
                             mapData.binFileName = name;
-                            pendingWorldBin = buf;
-                            pendingWorldBinName = name;
+                            rememberWorldBin(name, buf);
                             hexMapView.setMapData(mapData);
                             hexMapView.refresh();
                             updateInfo();
@@ -3876,8 +3945,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
                 }
                 mapData=FileParser.loadFile(buf,name);currentFileName=name;history.clear();if(mapData!=null)mapData.historyRef=history;
                 if (mapData != null && mapData.binOriginalData != null) {
-                    pendingWorldBin = mapData.binOriginalData;
-                    pendingWorldBinName = name;
+                    rememberWorldBin(name, mapData.binOriginalData);
                 }
                 hexMapView.setMapData(mapData);updateInfo();updateBtnState();
                 blockIdText.setText("未选中");selectedInfo.setText("已加载: "+name);
@@ -3895,6 +3963,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
                 FileParser.loadConquestTerrain(mapData, buf);
                 mapData.binOriginalData = buf;
                 mapData.binFileName = name;
+                rememberWorldBin(name, buf);
                 hexMapView.setMapData(mapData);
                 hexMapView.refresh();
                 updateInfo();

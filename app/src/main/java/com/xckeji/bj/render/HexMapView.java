@@ -324,26 +324,16 @@ public class HexMapView extends View {
                             && mapData.sampledColors.get(cellIdx) != 0
                             && !mapData.editedCells.contains(cellIdx);
                     int baseColor = useSampled ? mapData.sampledColors.get(cellIdx) : tile.getTerrainColor();
-                    // 默认直接用地块归属色实心填充（法国地块就是蓝），不再叠半透明滤镜
-                    int terrLeg = (ownershipTint && provinceOwnerLegion != null
-                            && cellIdx < provinceOwnerLegion.length)
-                            ? provinceOwnerLegion[cellIdx] : 0xFF;
-                    boolean solidCountry = !provinceView && ownershipTint
-                            && terrLeg != 0xFF && terrLeg >= 0
-                            && terrLeg < mapData.legionColors.length;
                     if (provinceView) {
                         int pv = (mapData.provinces != null && cellIdx < mapData.provinces.length)
                                 ? mapData.provinces[cellIdx] : 0;
                         tilePaint.setColor(provinceColor(pv));
                         c.drawPath(sharedPath, tilePaint);
-                    } else if (solidCountry) {
-                        tilePaint.setColor(mapData.legionColors[terrLeg]);
-                        c.drawPath(sharedPath, tilePaint);
                     } else {
                         tilePaint.setColor(baseColor);
                         c.drawPath(sharedPath, tilePaint);
                     }
-                    if (provinceView || solidCountry || useSampled) {
+                    if (provinceView || useSampled) {
                         // 不画贴图
                     } else {
                         c.save();
@@ -365,6 +355,15 @@ public class HexMapView extends View {
                             }
                         }
                         c.restore();
+                    }
+                    // 国家/省份归属半透明覆盖：地形照常显示，上面叠一层国家颜色
+                    if (!provinceView && ownershipTint) {
+                        int leg = (provinceOwnerLegion != null && cellIdx < provinceOwnerLegion.length)
+                                ? provinceOwnerLegion[cellIdx] : 0xFF;
+                        if (leg != 0xFF && leg >= 0 && leg < mapData.legionColors.length) {
+                            tilePaint.setColor((mapData.legionColors[leg] & 0x00FFFFFF) | 0x80000000);
+                            c.drawPath(sharedPath, tilePaint);
+                        }
                     }
                     int bid = mapData.getBuildingId(x, y);
                     if (bid > 0 && buildingBmps != null) {
@@ -830,30 +829,21 @@ public class HexMapView extends View {
                     && !mapData.editedCells.contains(cellIdx);
                 int baseColor = useSampled ? mapData.sampledColors.get(cellIdx) : tile.getTerrainColor();
 
-                // 1. 底色：默认直接用地块归属色实心填充（法国地块就是蓝），不再叠半透明滤镜
+                // 1. 底色
                 buildHexPath(px, py);
-                int terrLeg = (ownershipTint && provinceOwnerLegion != null
-                        && cellIdx < provinceOwnerLegion.length)
-                        ? provinceOwnerLegion[cellIdx] : 0xFF;
-                boolean solidCountry = !provinceView && ownershipTint
-                        && terrLeg != 0xFF && terrLeg >= 0
-                        && terrLeg < mapData.legionColors.length;
                 if (provinceView) {
                     // 省规划视图：每个省按省规划值生成不同颜色，便于区分省份
                     int pv = (mapData.provinces != null && cellIdx < mapData.provinces.length)
                             ? mapData.provinces[cellIdx] : 0;
                     tilePaint.setColor(provinceColor(pv));
                     canvas.drawPath(sharedPath, tilePaint);
-                } else if (solidCountry) {
-                    tilePaint.setColor(mapData.legionColors[terrLeg]);
-                    canvas.drawPath(sharedPath, tilePaint);
                 } else {
                     tilePaint.setColor(baseColor);
                     canvas.drawPath(sharedPath, tilePaint);
                 }
 
-                // 2. clip + 贴图（实心国家色/采样色格子不画贴图）
-                if (provinceView || solidCountry || useSampled) {
+                // 2. clip + 贴图（采样色格子不画贴图，只显示纯色）
+                if (provinceView || useSampled) {
                     // 不画贴图
                 } else {
                     canvas.save();
@@ -880,6 +870,16 @@ public class HexMapView extends View {
                         }
                     }
                     canvas.restore();
+                }
+
+                // 2.5 国家/省份归属半透明覆盖：地形照常显示，上面叠一层国家颜色
+                if (!provinceView && ownershipTint) {
+                    int leg = (provinceOwnerLegion != null && cellIdx < provinceOwnerLegion.length)
+                            ? provinceOwnerLegion[cellIdx] : 0xFF;
+                    if (leg != 0xFF && leg >= 0 && leg < mapData.legionColors.length) {
+                        tilePaint.setColor((mapData.legionColors[leg] & 0x00FFFFFF) | 0x80000000);
+                        canvas.drawPath(sharedPath, tilePaint);
+                    }
                 }
 
                 // 3. 网格（缩得太小时网格不可见，跳过以省大量 drawPath）
@@ -1216,6 +1216,8 @@ public class HexMapView extends View {
             else tt.setTerrain(g);
             mapData.editedCells.add(idx);
         }
+        // 涂地后处理被涂格子：陆地按位置选真实变体，避免整块矩形纯色贴图
+        mapData.finishPaint(cellsToPaint);
         selectedX = x; selectedY = y;
         invalidate();
         if (listener != null) listener.onTileSelected(x,y,mapData.getTile(x,y));
