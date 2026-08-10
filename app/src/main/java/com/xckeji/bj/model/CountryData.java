@@ -26,4 +26,11 @@ public class CountryData {
         String n = NAMES.get(countryId);
         return n != null ? n : ("国家" + countryId);
     }
+
+    /** 添加自定义国家（供“添加国家”功能使用，可覆盖/新增 ID）。 */
+    public static void addCountry(int countryId, String name) {
+        if (countryId > 0 && name != null && !name.trim().isEmpty()) {
+            NAMES.put(countryId, name.trim());
+        }
+    }
 }

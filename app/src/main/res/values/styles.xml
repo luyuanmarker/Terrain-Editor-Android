@@ -4,4 +4,13 @@
         <item name="android:windowFullscreen">true</item>
         <item name="android:windowNoTitle">true</item>
     </style>
+
+    <!-- 深色 ImGui 风格对话框 -->
+    <style name="DarkDialog" parent="Theme.AppCompat.Dialog.Alert">
+        <item name="android:windowBackground">#1b1b1f</item>
+        <item name="android:colorBackground">#1b1b1f</item>
+        <item name="android:textColorPrimary">#e5e7eb</item>
+        <item name="android:textColorSecondary">#9ca3af</item>
+        <item name="colorAccent">#3b82f6</item>
+    </style>
 </resources>

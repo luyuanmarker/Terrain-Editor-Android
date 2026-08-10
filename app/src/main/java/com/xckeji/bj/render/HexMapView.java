@@ -40,6 +40,12 @@ public class HexMapView extends View {
     // 优先取 军团归属[省规划坐标]，失联/中立时用该省城市的军团归属兜底
     private int[] provinceOwnerLegion;
     private OnTileSelectListener listener;
+    /** 兵种笔刷回调（由 MainActivity 注入）：锁定兵种 + 开启笔刷时，涂抹逐个添加兵种。 */
+    private java.util.function.BiConsumer<Integer, Integer> armyBrushHandler;
+
+    public void setArmyBrushHandler(java.util.function.BiConsumer<Integer, Integer> handler) {
+        armyBrushHandler = handler;
+    }
     private GestureDetector gestureDetector;
     private Paint tilePaint, gridPaint, selectedPaint;
     private Paint multiPaint;
@@ -231,6 +237,10 @@ public class HexMapView extends View {
         invalidate();
     }
 
+    public boolean isProvinceView() {
+        return provinceView;
+    }
+
     public void setViewOnly(boolean v) {
         viewOnly = v;
         invalidate();
@@ -325,6 +335,7 @@ public class HexMapView extends View {
                             && !mapData.editedCells.contains(cellIdx);
                     int baseColor = useSampled ? mapData.sampledColors.get(cellIdx) : tile.getTerrainColor();
                     if (provinceView) {
+                        // 省区视图：每个省一种稳定颜色 + 编号文字（文字在循环后统一叠加）
                         int pv = (mapData.provinces != null && cellIdx < mapData.provinces.length)
                                 ? mapData.provinces[cellIdx] : 0;
                         tilePaint.setColor(provinceColor(pv));
@@ -679,6 +690,17 @@ public class HexMapView extends View {
         return android.graphics.Color.HSVToColor(new float[]{hue, 0.45f, 0.92f});
     }
 
+    /** 官方规则：省区显示颜色 = 省代表格的军团归属（国家地块颜色）；无归属=中性浅灰。 */
+    private int provinceOwnerColor(int cellIdx) {
+        if (mapData == null || mapData.legionColors == null) return 0xFFe8ecef;
+        int leg = (provinceOwnerLegion != null && cellIdx < provinceOwnerLegion.length)
+                ? provinceOwnerLegion[cellIdx] : 0xFF;
+        if (leg != 0xFF && leg >= 0 && leg < mapData.legionColors.length) {
+            return mapData.legionColors[leg];
+        }
+        return 0xFFe8ecef;
+    }
+
     /**
      * 获取 (gid,tid) 的六边形贴图缓存：底色+贴图一次性 clip 到六边形，
      * 之后每帧只需一次 drawBitmap，不再逐格 clipPath。
@@ -747,8 +769,11 @@ public class HexMapView extends View {
     private void clamp() {
         float W = mw(), H = mh(), vw = getWidth(), vh = getHeight();
         if (vw <= 0 || vh <= 0) return;
-        if (W <= vw) offsetX = (vw-W)/2f; else { if (offsetX > 20) offsetX = 20; if (offsetX+W < vw-20) offsetX = vw-W-20; }
-        if (H <= vh) offsetY = (vh-H)/2f; else { if (offsetY > 20) offsetY = 20; if (offsetY+H < vh-20) offsetY = vh-H-20; }
+        // 地图小于视口时居中；大于视口时允许平移但边缘与屏幕对齐（无死区）
+        if (W <= vw) offsetX = (vw - W) / 2f;
+        else { if (offsetX > 0) offsetX = 0; if (offsetX + W < vw) offsetX = vw - W; }
+        if (H <= vh) offsetY = (vh - H) / 2f;
+        else { if (offsetY > 0) offsetY = 0; if (offsetY + H < vh) offsetY = vh - H; }
     }
 
     @Override
@@ -804,12 +829,23 @@ public class HexMapView extends View {
 
         // 可见范围裁剪：只遍历视口内的格子，大地图放大时不遍历整图
         float vs = hs();
-        int vx0 = Math.max(0, (int) ((offsetX - vs * 2f) / (1.5f * vs)) - 1);
+        int vx0 = Math.max(0, (int) Math.floor(-offsetX / (1.5f * vs)) - 1);
         int vx1 = Math.min(mapData.width - 1,
-                (int) ((getWidth() - offsetX + vs * 2f) / (1.5f * vs)) + 1);
-        int vy0 = Math.max(0, (int) ((offsetY - vs * 2f) / (vs * (float) Math.sqrt(3))) - 2);
+                (int) Math.ceil((getWidth() - offsetX) / (1.5f * vs)) + 1);
+        int vy0 = Math.max(0, (int) Math.floor(-offsetY / (vs * (float) Math.sqrt(3))) - 2);
         int vy1 = Math.min(mapData.height - 1,
-                (int) ((getHeight() - offsetY + vs * 2f) / (vs * (float) Math.sqrt(3))) + 2);
+                (int) Math.ceil((getHeight() - offsetY) / (vs * (float) Math.sqrt(3))) + 2);
+        // 刷省反馈画笔：绿色描边 + 白底黑字编号
+        Paint provincePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        provincePaint.setStyle(Paint.Style.STROKE);
+        provincePaint.setStrokeWidth(3f);
+        provincePaint.setColor(0xFF22c55e);
+        Paint feedbackBg = new Paint();
+        feedbackBg.setColor(0xFFFFFFFF);
+        Paint feedbackTxt = new Paint(Paint.ANTI_ALIAS_FLAG);
+        feedbackTxt.setTextSize(13);
+        feedbackTxt.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        feedbackTxt.setColor(0xFF111827);
         for (int y = vy0; y <= vy1; y++) {
             for (int x = vx0; x <= vx1; x++) {
                 TerrainTile tile = mapData.getTile(x, y);
@@ -832,7 +868,7 @@ public class HexMapView extends View {
                 // 1. 底色
                 buildHexPath(px, py);
                 if (provinceView) {
-                    // 省规划视图：每个省按省规划值生成不同颜色，便于区分省份
+                    // 省区视图：每个省一种稳定颜色 + 编号文字（文字在循环后统一叠加）
                     int pv = (mapData.provinces != null && cellIdx < mapData.provinces.length)
                             ? mapData.provinces[cellIdx] : 0;
                     tilePaint.setColor(provinceColor(pv));
@@ -886,6 +922,18 @@ public class HexMapView extends View {
                 if (s >= 3f) {
                     gridPaint.setStrokeWidth(Math.max(0.5f, scale*0.8f));
                     canvas.drawPath(sharedPath, gridPaint);
+                }
+
+                // 刷省反馈：刚划入的地块显示绿色描边 + 省区编号文字
+                if (mapData.provinceEditMode && mapData.provinceBrushSeed >= 0
+                        && mapData.provinces != null && cellIdx < mapData.provinces.length
+                        && mapData.provinces[cellIdx] == mapData.provinceBrushSeed
+                        && mapData.editedCells.contains(cellIdx)) {
+                    canvas.drawPath(sharedPath, provincePaint);
+                    String lb = "#" + mapData.provinces[cellIdx];
+                    float tw = feedbackTxt.measureText(lb);
+                    canvas.drawRect(px - tw / 2f - 3, py - 10, px + tw / 2f + 3, py + 10, feedbackBg);
+                    canvas.drawText(lb, px - tw / 2f, py + 4, feedbackTxt);
                 }
 
                 // 4. 多选高亮
@@ -942,6 +990,48 @@ public class HexMapView extends View {
                         canvas.restore();
                     }
                 }
+            }
+        }
+
+        // 省区视图：在每个省的代表位置显示省区编号文字（颜色看不懂时看编号）
+        if (provinceView && mapData.provinces != null) {
+            int n = mapData.getTotalTiles();
+            java.util.Map<Integer, float[]> centers = new java.util.HashMap<>();
+            java.util.Map<Integer, int[]> counts = new java.util.HashMap<>();
+            for (int i = 0; i < n; i++) {
+                int pv = mapData.provinces[i];
+                if (pv == 0 || pv == 0xFFFF) continue;
+                float px = hcx(i % mapData.width);
+                float py = hcy(i % mapData.width, i / mapData.width);
+                float[] c = centers.get(pv);
+                if (c == null) {
+                    centers.put(pv, new float[]{px, py});
+                    counts.put(pv, new int[]{1});
+                } else {
+                    c[0] += px;
+                    c[1] += py;
+                    counts.get(pv)[0]++;
+                }
+            }
+            Paint labelBg = new Paint();
+            labelBg.setColor(0xFFFFFFFF);
+            Paint labelBorder = new Paint();
+            labelBorder.setColor(0xFF374151);
+            labelBorder.setStyle(Paint.Style.STROKE);
+            labelBorder.setStrokeWidth(2f);
+            Paint labelPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+            labelPaint.setTextSize(15);
+            labelPaint.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+            labelPaint.setColor(0xFF111827);
+            for (java.util.Map.Entry<Integer, float[]> e : centers.entrySet()) {
+                int cnt = counts.get(e.getKey())[0];
+                float cx = e.getValue()[0] / cnt;
+                float cy = e.getValue()[1] / cnt;
+                String label = "#" + e.getKey();
+                float tw = labelPaint.measureText(label);
+                canvas.drawRect(cx - tw / 2f - 4, cy - 12, cx + tw / 2f + 4, cy + 12, labelBg);
+                canvas.drawRect(cx - tw / 2f - 4, cy - 12, cx + tw / 2f + 4, cy + 12, labelBorder);
+                canvas.drawText(label, cx - tw / 2f, cy + 5, labelPaint);
             }
         }
 
@@ -1179,6 +1269,15 @@ public class HexMapView extends View {
     private void selectCell(int x, int y) {
         if (mapData == null || viewOnly) return;
         int idx = y * mapData.width + x;
+        // 省区笔刷：开启且已选省区时，点击地块即划入该省区
+        if (mapData.provinceEditMode && mapData.provinceBrushSeed >= 0) {
+            mapData.ensureProvincesSize();
+            mapData.provinces[idx] = mapData.provinceBrushSeed;
+            mapData.editedCells.add(idx);
+            com.xckeji.bj.file.FileParser.patchProvince(mapData, idx);
+            invalidate();
+            return;
+        }
         if (mapData.brushMode) { applyBrush(x, y); return; }
         if (mapData.multiSelectMode) {
             mapData.toggleBlockSelection(idx);
@@ -1194,7 +1293,10 @@ public class HexMapView extends View {
     }
     private float sp(MotionEvent e) { if (e.getPointerCount()<2) return 0; float dx=e.getX(0)-e.getX(1), dy=e.getY(0)-e.getY(1); return (float)Math.sqrt(dx*dx+dy*dy); }
     private void applyBrush(int x, int y) {
-        if (mapData == null || viewOnly || mapData.selectedTerrainGroup < 0) return;
+        if (mapData == null || viewOnly) return;
+        // 兵种笔刷：锁定了兵种图标且开启了笔刷时，涂抹=批量添加兵种
+        boolean armyBrush = mapData.selectedArmyType >= 0 && armyBrushHandler != null;
+        if (!armyBrush && mapData.selectedTerrainGroup < 0) return;
         int g = mapData.selectedTerrainGroup;
         int radius = mapData.brushRadius;
 
@@ -1207,6 +1309,15 @@ public class HexMapView extends View {
 
         // 获取半径内的所有格子
         java.util.Set<Integer> cellsToPaint = getBrushCells(x, y, radius);
+        if (armyBrush) {
+            for (int idx : cellsToPaint) {
+                if (idx < 0 || idx >= mapData.tiles.size()) continue;
+                armyBrushHandler.accept(idx % mapData.width, idx / mapData.width);
+            }
+            selectedX = x; selectedY = y;
+            invalidate();
+            return;
+        }
         for (int idx : cellsToPaint) {
             if (idx < 0 || idx >= mapData.tiles.size()) continue;
             TerrainTile tt = mapData.tiles.get(idx);

@@ -435,6 +435,39 @@ public class FileParser {
         System.arraycopy(raw300, 0, mapData.btlOriginalData, addr, 300);
     }
 
+    /** 把内存省区值写回 BTL 省规划段对应偏移（编辑省区后立即生效，供后续扩展/裁剪使用）。 */
+    public static void patchProvince(MapData mapData, int index) {
+        if (mapData == null || mapData.btlOriginalData == null || mapData.provinces == null) return;
+        if (index < 0 || index >= mapData.provinces.length) return;
+        try {
+            BtlHeaderInfo h = parseBTLHeader(mapData.btlOriginalData);
+            int total = h.width * h.height;
+            int adminStart = h.terrainStart + (h.independentTerrain ? total * 16 : 0);
+            int addr = adminStart + index * 2;
+            if (addr + 2 > mapData.btlOriginalData.length) return;
+            int pv = mapData.provinces[index];
+            int stored = (pv == 0 || pv == 0xFFFF) ? pv : pv + mapData.coordBase;
+            mapData.btlOriginalData[addr] = (byte) (stored & 0xFF);
+            mapData.btlOriginalData[addr + 1] = (byte) ((stored >> 8) & 0xFF);
+        } catch (Exception ignored) {
+        }
+    }
+
+    /** 把内存军团归属写回 BTL 归属段对应偏移（给城市/地块设置国家归属后立即生效）。 */
+    public static void patchBelong(MapData mapData, int index) {
+        if (mapData == null || mapData.btlOriginalData == null || mapData.belongs == null) return;
+        if (index < 0 || index >= mapData.belongs.length) return;
+        try {
+            BtlHeaderInfo h = parseBTLHeader(mapData.btlOriginalData);
+            int total = h.width * h.height;
+            int ownershipStart = h.buildingStart - total;
+            int addr = ownershipStart + index;
+            if (addr < 0 || addr >= mapData.btlOriginalData.length) return;
+            mapData.btlOriginalData[addr] = mapData.belongs[index];
+        } catch (Exception ignored) {
+        }
+    }
+
     /** 从当前 btlOriginalData 重新解析兵种与军团数据（扩展/裁剪后调用）。 */
     public static void refreshArmies(MapData mapData) {
         if (mapData == null || mapData.btlOriginalData == null) return;
@@ -489,16 +522,14 @@ public class FileParser {
                 }
             }
 
-            // 3. 省规划（2字节/格）
+            // 3. 省规划（2字节/格）：从内存省区数组写回（值=省区代表格坐标，加坐标基准）
             for (int i = 0; i < newTotalTiles; i++) {
                 int addr = newAdminStart + i * 2;
-                if (i < oldTotalTiles) {
-                    result[addr] = oldBtl[oldAdminStart + i * 2];
-                    result[addr + 1] = oldBtl[oldAdminStart + i * 2 + 1];
-                } else {
-                    result[addr] = 0;
-                    result[addr + 1] = 0;
-                }
+                int pv = (mapData.provinces != null && i < mapData.provinces.length)
+                        ? mapData.provinces[i] : 0;
+                int stored = (pv == 0 || pv == 0xFFFF) ? pv : pv + mapData.coordBase;
+                result[addr] = (byte) (stored & 0xFF);
+                result[addr + 1] = (byte) ((stored >> 8) & 0xFF);
             }
 
             // 4. 军团归属（1字节/格）

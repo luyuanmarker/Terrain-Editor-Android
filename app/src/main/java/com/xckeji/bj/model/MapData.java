@@ -89,6 +89,10 @@ public class MapData {
     public int selectedBuildingId = -1;
     /** 锁定的兵种代码（-1=未锁定）：点击地图地块连续放置该兵种。 */
     public int selectedArmyType = -1;
+    /** 省区笔刷：当前选中的省区代表格（-1=未选）。开启后点击地块即划入该省区。 */
+    public int provinceBrushSeed = -1;
+    /** 省区编辑模式：开启后点击地图=划省区（代替选格）。 */
+    public boolean provinceEditMode = false;
     public boolean brushMode = false;
     public int brushRadius = 0;
     // 笔刷模式辅助
@@ -123,6 +127,19 @@ public class MapData {
     }
 
     public int getTotalTiles() { return width * height; }
+
+    /** 确保省规划/归属数组与地图尺寸一致（纯 BIN 地图没有省规划时补齐为 0xFFFF）。 */
+    public void ensureProvincesSize() {
+        int total = width * height;
+        if (provinces == null || provinces.length != total) {
+            provinces = new int[total];
+            java.util.Arrays.fill(provinces, 0xFFFF);
+        }
+        if (belongs == null || belongs.length != total) {
+            belongs = new byte[total];
+            java.util.Arrays.fill(belongs, (byte) 0xFF);
+        }
+    }
     public TerrainTile getTile(int x, int y) {
         if (x < 0 || x >= width || y < 0 || y >= height) return null;
         return tiles.get(y * width + x);
