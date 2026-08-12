@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WC4 地形编辑器（安卓）</title>
+<meta name="description" content="手机上的世界征服者4地图编辑器：改地形、加兵种、画省区、设国家，战役征服世界图都能改。">
+<style>
+:root{
+  --bg:#0d0f1c; --card:#181c31; --line:#2a3050; --txt:#e8ebf7; --mut:#9aa2c2;
+  --acc:#8f6bff; --acc2:#4db8ff;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  background:var(--bg); color:var(--txt); line-height:1.75;
+}
+.wrap{max-width:820px;margin:0 auto;padding:0 22px}
+a{color:var(--acc2)}
+
+header{border-bottom:1px solid var(--line)}
+.nav{display:flex;align-items:center;justify-content:space-between;height:58px}
+.logo{font-weight:800;font-size:17px}
+.nav a{color:var(--mut);font-size:14px;margin-left:20px}
+.nav a:hover{color:var(--txt)}
+
+.btn{display:inline-block;border-radius:999px;padding:10px 24px;font-weight:700;font-size:15px;border:none;cursor:pointer;transition:.15s}
+.btn-p{background:linear-gradient(90deg,var(--acc),var(--acc2));color:#0d0f1c}
+.btn-o{background:transparent;color:var(--txt);border:1px solid var(--line)}
+.btn-o:hover{border-color:var(--acc2)}
+
+.hero{text-align:center;padding:72px 20px 46px}
+.hero h1{font-size:clamp(28px,5vw,44px);font-weight:900;line-height:1.25}
+.hero h1 b{background:linear-gradient(90deg,var(--acc),var(--acc2));-webkit-background-clip:text;background-clip:text;color:transparent}
+.hero p{color:var(--mut);font-size:16px;max-width:600px;margin:16px auto 28px}
+.hero .btns{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+.hero .small{margin-top:14px;font-size:13px;color:#6d7594}
+
+section{padding:44px 0}
+.sec-h{margin-bottom:24px}
+.sec-h h2{font-size:22px;font-weight:800}
+
+.note{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px 22px;font-size:14.5px;color:var(--mut)}
+.note b{color:var(--txt)}
+
+.list{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}
+.item{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 18px}
+.item h3{font-size:15.5px;margin-bottom:4px}
+.item p{font-size:13.5px;color:var(--mut)}
+
+.steps{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}
+.step{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 18px}
+.step b{display:block;font-size:15px;margin-bottom:3px}
+.step p{font-size:13.5px;color:var(--mut)}
+
+.dl{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:44px 26px;text-align:center}
+.dl h2{font-size:24px;font-weight:800;margin-bottom:10px}
+.dl p{color:var(--mut);font-size:14.5px;margin-bottom:22px}
+.group{display:inline-flex;align-items:center;gap:10px;background:#0d0f1c;border:1px dashed var(--acc);border-radius:12px;padding:12px 20px;font-size:20px;font-weight:800;margin-bottom:16px;cursor:pointer}
+.dl .tips{font-size:12.5px;color:#6d7594;margin-top:20px}
+
+details{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 18px;margin-bottom:10px}
+summary{cursor:pointer;font-weight:700;font-size:14.5px}
+details p{margin-top:8px;font-size:13.5px;color:var(--mut)}
+
+footer{border-top:1px solid var(--line);padding:26px 0 36px;text-align:center;color:#6d7594;font-size:13px}
+footer b{color:var(--txt)}
+
+@media(max-width:620px){
+  .list,.steps{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap nav">
+    <div class="logo">WC4 地形编辑器</div>
+    <nav>
+      <a href="#features">功能</a>
+      <a href="#how">怎么用</a>
+      <a href="#download">下载</a>
+    </nav>
+  </div>
+</header>
+
+<div class="hero">
+  <div class="wrap">
+    <h1>我做了个手机上的<br>世界征服者4 <b>地图编辑器</b></h1>
+    <p>不用电脑，不用反编译，直接在手机上改战役、征服和世界地图。改完保存，放进游戏就能用。</p>
+    <div class="btns">
+      <a class="btn btn-p" href="#download">下载安装包</a>
+      <a class="btn btn-o" href="#features">先看功能</a>
+    </div>
+    <p class="small">安卓 · v1.5 内测版 · 自己做的，持续更新</p>
+  </div>
+</div>
+
+<section>
+  <div class="wrap note">
+    这编辑器是按游戏实际的 BTL 二进制格式做的，不是套壳改内存。你能看到的数据，基本就是文件里真正的数据：
+    兵种 48 字节一条、军团 300 字节一条、建筑 32 字节一条，字段都是对着格式一个个对出来的。
+    所以改完保存，游戏里是什么样就是什么样，不会"看着改了结果没用"。
+  </div>
+</section>
+
+<section id="features">
+  <div class="wrap">
+    <div class="sec-h"><h2>目前能做的</h2></div>
+    <div class="list">
+      <div class="item"><h3>地形</h3><p>笔刷涂地形、随机地形、扩展地图（上下左右）、框选截取，陆地海洋随便画。</p></div>
+      <div class="item"><h3>城市</h3><p>加城市、改建筑全部字段、给城市设国家归属（直接选国旗），新放的城市也能编辑。</p></div>
+      <div class="item"><h3>兵种</h3><p>图标选兵种、改 48 字节全字段、编制用下拉框、随机兵力、批量放置。</p></div>
+      <div class="item"><h3>省区规划</h3><p>取省/刷省笔刷，按住拖动连续划省，省区颜色叠在地形上，带编号，画错能撤销。</p></div>
+      <div class="item"><h3>国家 / 军团</h3><p>军团列表、国家颜色、新建国家、改军团 300 字节数据。</p></div>
+      <div class="item"><h3>BTL 主数据</h3><p>版本、地图序号、胜利条件、战役时代、事件编辑。打开 APK 也能直接读里面的地图文件。</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="how">
+  <div class="wrap">
+    <div class="sec-h"><h2>使用流程</h2></div>
+    <div class="steps">
+      <div class="step"><b>1. 打开文件</b><p>战役 stage、征服 conquest、world.bin / map.bin，或者 APK 里的地图。</p></div>
+      <div class="step"><b>2. 改</b><p>地形、城市、兵种、省区、国家，改到你满意。</p></div>
+      <div class="step"><b>3. 保存</b><p>导出 btl / bin。征服的地形和关卡要一起保存。</p></div>
+      <div class="step"><b>4. 放进游戏</b><p>文件放回游戏数据目录的 bin/ 里。强烈建议先备份原文件。</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="download">
+  <div class="wrap">
+    <div class="dl">
+      <h2>下载</h2>
+      <p>安卓 · v1.5 内测版<br>安装包发布后会直接放在这里，也可以进群拿最新版</p>
+      <div style="margin-bottom:26px"><a class="btn btn-p" href="#" id="dlBtn">下载 APK</a></div>
+      <p style="margin-bottom:8px">交流群：</p>
+      <div class="group" id="groupNum" title="点击复制群号">1001026138</div>
+      <div><button class="btn btn-o" id="copyBtn" type="button">复制群号</button></div>
+      <p class="tips">内测版，有些边角可能没做好，遇到问题直接群里找我。<br>装新版前先卸载旧版。</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="sec-h"><h2>一些说明</h2></div>
+    <details open>
+      <summary>支持哪些文件？</summary>
+      <p>战役 stageXXXX.btl、征服 conquestXXXX.btl、世界地形 world.bin / map.bin，还有 APK 压缩包里的 .btl / .bin。</p>
+    </details>
+    <details>
+      <summary>要 ROOT 吗？</summary>
+      <p>不用。编辑器只需要存储权限。把文件放回游戏目录那步，看你手机怎么处理，跟编辑器无关。</p>
+    </details>
+    <details>
+      <summary>改坏了怎么办？</summary>
+      <p>改之前备份原文件。编辑器里有撤销，但最保险的还是备份。</p>
+    </details>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <p><b>WC4 地形编辑器</b> · v1.5 内测版</p>
+    <p style="margin-top:4px">作者：【你的名字/B站ID】 · 交流群 1001026138 · 新版本和功能都会先在群里发</p>
+  </div>
+</footer>
+
+<script>
+  document.getElementById('copyBtn').addEventListener('click', function () {
+    var text = '1001026138';
+    var done = function () {
+      var btn = this;
+      btn.textContent = '已复制';
+      setTimeout(function () { btn.textContent = '复制群号'; }, 2000);
+    }.bind(this);
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(text).then(done, function () { fallbackCopy(text); done(); });
+    } else { fallbackCopy(text); done(); }
+  });
+  function fallbackCopy(text) {
+    var ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); } catch (e) { }
+    document.body.removeChild(ta);
+  }
+  document.getElementById('dlBtn').addEventListener('click', function (e) {
+    if (this.getAttribute('href') === '#') {
+      e.preventDefault();
+      alert('安装包还没放出来，先进群 1001026138 拿最新版吧。');
+    }
+  });
+</script>
+</body>
+</html>

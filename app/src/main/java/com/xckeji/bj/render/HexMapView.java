@@ -68,6 +68,7 @@ public class HexMapView extends View {
     private Map<Integer, Bitmap> legionBmps;
     private Map<Integer, Bitmap> flagBmps;
     private Map<Integer, Bitmap> buildingBmps;
+    private Bitmap trapLandBmp, trapSeaBmp;
     private boolean imagesLoaded = false;
     private Bitmap borderSelectedBmp;
 
@@ -116,6 +117,8 @@ public class HexMapView extends View {
             buildingBmps = new HashMap<>();
             landBmp = load("map/land.png");
             seaBmp = load("map/sea.png");
+            trapLandBmp = load("pixmap/buildmark/land_trap.png");
+            trapSeaBmp = load("pixmap/buildmark/sea_trap.png");
             for (int i = 1; i <= 38; i++) {
                 Bitmap b = load("legion/legion_icon_" + i + ".png");
                 if (b != null) legionBmps.put(i, b);
@@ -247,6 +250,12 @@ public class HexMapView extends View {
     }
     public boolean isViewOnly() { return viewOnly; }
 
+    /** 兵种角标数字：显示编制（raw 0x4），无记录时默认 1。 */
+    private String armyBadgeText(MapData.Army a) {
+        int f = (a.raw != null && a.raw.length > 4) ? (a.raw[4] & 0xFF) : 1;
+        return String.valueOf(f);
+    }
+
     /** 把整张地图按基准比例渲染成一张 PNG 位图（用于导出/截图分享）。 */
     public Bitmap renderFullMap() {
         if (mapData == null) return null;
@@ -334,17 +343,9 @@ public class HexMapView extends View {
                             && mapData.sampledColors.get(cellIdx) != 0
                             && !mapData.editedCells.contains(cellIdx);
                     int baseColor = useSampled ? mapData.sampledColors.get(cellIdx) : tile.getTerrainColor();
-                    if (provinceView) {
-                        // 省区视图：每个省一种稳定颜色 + 编号文字（文字在循环后统一叠加）
-                        int pv = (mapData.provinces != null && cellIdx < mapData.provinces.length)
-                                ? mapData.provinces[cellIdx] : 0;
-                        tilePaint.setColor(provinceColor(pv));
-                        c.drawPath(sharedPath, tilePaint);
-                    } else {
-                        tilePaint.setColor(baseColor);
-                        c.drawPath(sharedPath, tilePaint);
-                    }
-                    if (provinceView || useSampled) {
+                    tilePaint.setColor(baseColor);
+                    c.drawPath(sharedPath, tilePaint);
+                    if (useSampled) {
                         // 不画贴图
                     } else {
                         c.save();
@@ -367,8 +368,15 @@ public class HexMapView extends View {
                         }
                         c.restore();
                     }
-                    // 国家/省份归属半透明覆盖：地形照常显示，上面叠一层国家颜色
-                    if (!provinceView && ownershipTint) {
+                    // 半透明覆盖层：省区视图=叠省区颜色且地形照常显示；否则叠国家归属颜色
+                    if (provinceView) {
+                        int pv = (mapData.provinces != null && cellIdx < mapData.provinces.length)
+                                ? mapData.provinces[cellIdx] : 0;
+                        if (pv != 0 && pv != 0xFFFF) {
+                            tilePaint.setColor((provinceColor(pv) & 0x00FFFFFF) | 0x66000000);
+                            c.drawPath(sharedPath, tilePaint);
+                        }
+                    } else if (ownershipTint) {
                         int leg = (provinceOwnerLegion != null && cellIdx < provinceOwnerLegion.length)
                                 ? provinceOwnerLegion[cellIdx] : 0xFF;
                         if (leg != 0xFF && leg >= 0 && leg < mapData.legionColors.length) {
@@ -409,8 +417,49 @@ public class HexMapView extends View {
     /** 动态覆盖层：兵种标记、截取框、图填引导图（整图缓存模式下也每帧绘制）。 */
     private void drawDynamicOverlays(Canvas canvas) {
         drawArmyMarkers(canvas);
+        drawTraps(canvas);
         drawCropRect(canvas);
         drawGuideImage(canvas);
+    }
+
+    /** 地雷/陷阱标记：官方图标（海洋 sea_trap、陆地 land_trap），右上角标等级。 */
+    private void drawTraps(Canvas canvas) {
+        if (mapData == null || mapData.traps == null || mapData.traps.isEmpty()) return;
+        for (MapData.Trap t : mapData.traps) {
+            if (t == null) continue;
+            float px = hcx(t.x), py = hcy(t.x, t.y), s = hs();
+            if (px + s < 0 || px - s > getWidth() || py + s < 0 || py - s > getHeight()) continue;
+            TerrainTile tile = mapData.getTile(t.x, t.y);
+            Bitmap icon = (tile != null && tile.bmTerrain1Group == 1)
+                    ? trapSeaBmp : trapLandBmp;
+            float iconW = s * 1.5f;
+            if (icon != null) {
+                float ratio = icon.getHeight() / (float) icon.getWidth();
+                float h2 = iconW * ratio;
+                canvas.drawBitmap(icon, null,
+                        new RectF(px - iconW / 2f, py - h2 / 2f,
+                                px + iconW / 2f, py + h2 / 2f), bitmapPaint);
+            } else {
+                Paint tp = new Paint(Paint.ANTI_ALIAS_FLAG);
+                tp.setColor(0xFFb91c1c);
+                canvas.drawCircle(px, py, Math.max(4f, s * 0.32f), tp);
+            }
+            // 等级角标（右上）
+            if (s >= 6 && t.level > 0) {
+                float bx = px + s * 0.5f, by = py - s * 0.42f;
+                float br = Math.max(5f, s * 0.24f);
+                Paint bgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+                bgPaint.setColor(0xD9000000);
+                canvas.drawCircle(bx, by, br, bgPaint);
+                Paint numPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+                numPaint.setColor(0xFFFFFFFF);
+                numPaint.setTextSize(br * 1.1f);
+                numPaint.setTextAlign(Paint.Align.CENTER);
+                numPaint.setFakeBoldText(true);
+                canvas.drawText(String.valueOf(t.level), bx,
+                        by + numPaint.getTextSize() * 0.36f, numPaint);
+            }
+        }
     }
 
     /** 选中/多选高亮/笔刷光标（整图缓存模式下单独绘制）。 */
@@ -520,7 +569,7 @@ public class HexMapView extends View {
                 numPaint.setTextSize(br * 1.15f);
                 numPaint.setTextAlign(Paint.Align.CENTER);
                 numPaint.setFakeBoldText(true);
-                canvas.drawText(String.valueOf(a.level), badgeX,
+                canvas.drawText(armyBadgeText(a), badgeX,
                         badgeY + numPaint.getTextSize() * 0.36f, numPaint);
             }
         }
@@ -865,21 +914,13 @@ public class HexMapView extends View {
                     && !mapData.editedCells.contains(cellIdx);
                 int baseColor = useSampled ? mapData.sampledColors.get(cellIdx) : tile.getTerrainColor();
 
-                // 1. 底色
+                // 1. 底色（地形颜色）
                 buildHexPath(px, py);
-                if (provinceView) {
-                    // 省区视图：每个省一种稳定颜色 + 编号文字（文字在循环后统一叠加）
-                    int pv = (mapData.provinces != null && cellIdx < mapData.provinces.length)
-                            ? mapData.provinces[cellIdx] : 0;
-                    tilePaint.setColor(provinceColor(pv));
-                    canvas.drawPath(sharedPath, tilePaint);
-                } else {
-                    tilePaint.setColor(baseColor);
-                    canvas.drawPath(sharedPath, tilePaint);
-                }
+                tilePaint.setColor(baseColor);
+                canvas.drawPath(sharedPath, tilePaint);
 
                 // 2. clip + 贴图（采样色格子不画贴图，只显示纯色）
-                if (provinceView || useSampled) {
+                if (useSampled) {
                     // 不画贴图
                 } else {
                     canvas.save();
@@ -908,8 +949,15 @@ public class HexMapView extends View {
                     canvas.restore();
                 }
 
-                // 2.5 国家/省份归属半透明覆盖：地形照常显示，上面叠一层国家颜色
-                if (!provinceView && ownershipTint) {
+                // 2.5 半透明覆盖层：省区视图=叠省区颜色且地形照常显示；否则叠国家归属颜色
+                if (provinceView) {
+                    int pv = (mapData.provinces != null && cellIdx < mapData.provinces.length)
+                            ? mapData.provinces[cellIdx] : 0;
+                    if (pv != 0 && pv != 0xFFFF) {
+                        tilePaint.setColor((provinceColor(pv) & 0x00FFFFFF) | 0x66000000);
+                        canvas.drawPath(sharedPath, tilePaint);
+                    }
+                } else if (ownershipTint) {
                     int leg = (provinceOwnerLegion != null && cellIdx < provinceOwnerLegion.length)
                             ? provinceOwnerLegion[cellIdx] : 0xFF;
                     if (leg != 0xFF && leg >= 0 && leg < mapData.legionColors.length) {
@@ -1086,7 +1134,7 @@ public class HexMapView extends View {
                                         px + fw / 2f, py - iconSize / 2f), bitmapPaint);
                     }
                 }
-                // 等级角标（图标右下角）
+                // 角标（图标右下角）：显示编制数字
                 if (s >= 6) {
                     float br = Math.max(5f, s * 0.24f);
                     float badgeX = px + iconSize / 2f - br * 0.35f;
@@ -1099,11 +1147,14 @@ public class HexMapView extends View {
                     numPaint.setTextSize(br * 1.15f);
                     numPaint.setTextAlign(Paint.Align.CENTER);
                     numPaint.setFakeBoldText(true);
-                    canvas.drawText(String.valueOf(a.level), badgeX,
+                    canvas.drawText(armyBadgeText(a), badgeX,
                             badgeY + numPaint.getTextSize() * 0.36f, numPaint);
                 }
             }
         }
+
+        // 地雷/陷阱标记（整图缓存模式以外逐帧绘制）
+        drawTraps(canvas);
 
         // 截取框选高亮（半透明绿框）
         if (cropRx1 >= 0 && mapData != null) {
@@ -1175,6 +1226,7 @@ public class HexMapView extends View {
             }
             canvas.restore();
         }
+
     }
 
     @Override
@@ -1190,29 +1242,61 @@ public class HexMapView extends View {
 
     private float lastX, lastY, lastDist = -1, downX, downY;
     private float pivotX, pivotY;
+    private float lastPivotX, lastPivotY;
     private boolean dragging = false, scaling = false;
+    // 一次省区笔刷手势内只保存一次撤销快照
+    private boolean provinceUndoSaved = false;
+    // 惯性滑动（fling）：手指快速划过时地图继续滑行
+    private float flingVx = 0, flingVy = 0;
+    private final Runnable flingRunnable = new Runnable() {
+        @Override public void run() {
+            if (mapData == null || (Math.abs(flingVx) < 2 && Math.abs(flingVy) < 2)) {
+                flingVx = 0; flingVy = 0;
+                return;
+            }
+            offsetX += flingVx / 60f;
+            offsetY += flingVy / 60f;
+            flingVx *= 0.92f;
+            flingVy *= 0.92f;
+            clamp();
+            invalidate();
+            postDelayed(this, 16);
+        }
+    };
     @Override public boolean onTouchEvent(MotionEvent e) {
         gestureDetector.onTouchEvent(e);
         switch (e.getAction() & MotionEvent.ACTION_MASK) {
             case MotionEvent.ACTION_DOWN:
                 lastX=e.getX();lastY=e.getY();downX=e.getX();downY=e.getY();
                 dragging=false;scaling=false;
-                if (mapData != null && !mapData.brushMode) {
-                    PointF h = p2h(e.getX(),e.getY());
-                    if (h != null) { int x=(int)h.x,y=(int)h.y; if (x>=0&&x<mapData.width&&y>=0&&y<mapData.height) selectCell(x,y); }
-                }
+                provinceUndoSaved = false;
+                // 选中改到单击抬起时触发，避免想拖动却误选中格子
+                stopFling();
                 return true;
             case MotionEvent.ACTION_POINTER_DOWN:
                 scaling=true; lastDist=sp(e);
                 // 记录双指中心作为缩放锚点
                 if (e.getPointerCount() >= 2) {
-                    float cx = (e.getX(0) + e.getX(1)) / 2f;
-                    float cy = (e.getY(0) + e.getY(1)) / 2f;
-                    pivotX = cx; pivotY = cy;
+                    lastPivotX = (e.getX(0) + e.getX(1)) / 2f;
+                    lastPivotY = (e.getY(0) + e.getY(1)) / 2f;
+                    pivotX = lastPivotX; pivotY = lastPivotY;
                 }
                 return true;
             case MotionEvent.ACTION_MOVE:
                 if (mapData == null) break;
+                // 省区笔刷：选了省区且开启省区编辑时，按住拖动连续划入
+                if (!viewOnly && e.getPointerCount() == 1
+                        && mapData.provinceEditMode && mapData.provinceBrushSeed >= 0) {
+                    PointF hp = p2h(e.getX(), e.getY());
+                    if (hp != null) {
+                        int bx = (int) hp.x, by = (int) hp.y;
+                        if (bx >= 0 && bx < mapData.width && by >= 0 && by < mapData.height) {
+                            paintProvinceAt(bx, by);
+                        }
+                    }
+                    lastX = e.getX(); lastY = e.getY();
+                    break;
+                }
                 // 画笔模式
                 if (!viewOnly && mapData.brushMode && e.getPointerCount() == 1) {
                     PointF hp = p2h(e.getX(), e.getY());
@@ -1223,7 +1307,7 @@ public class HexMapView extends View {
                     lastX = e.getX(); lastY = e.getY();
                     break;
                 }
-                // 双指缩放（以两指中心为锚点）
+                // 双指缩放 + 双指拖动（以两指中心为锚点）
                 if (scaling && e.getPointerCount() >= 2) {
                     float nd = sp(e);
                     if (lastDist > 0) {
@@ -1231,38 +1315,38 @@ public class HexMapView extends View {
                         float os = scale;
                         scale *= f;
                         if (scale < 0.3f) scale = 0.3f;
-                        if (scale > 3f) scale = 3f;
+                        if (scale > 4.5f) scale = 4.5f;
                         f = scale / os;
                         offsetX = pivotX - (pivotX - offsetX) * f;
                         offsetY = pivotY - (pivotY - offsetY) * f;
+                        // 双指整体拖动：平移画面
+                        float cx = (e.getX(0) + e.getX(1)) / 2f;
+                        float cy = (e.getY(0) + e.getY(1)) / 2f;
+                        offsetX += cx - lastPivotX;
+                        offsetY += cy - lastPivotY;
+                        lastPivotX = cx; lastPivotY = cy;
                         clamp(); invalidate();
                     }
                     lastDist = nd;
                     break;
-                }
-                // 单指拖动（降低触发阈值到1px，拖动更跟手）
-                if (!scaling) {
-                    float dx = e.getX() - lastX;
-                    float dy = e.getY() - lastY;
-                    if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
-                        dragging = true;
-                        offsetX += dx;
-                        offsetY += dy;
-                        lastX = e.getX();
-                        lastY = e.getY();
-                        clamp(); invalidate();
-                    }
                 }
                 break;
             case MotionEvent.ACTION_POINTER_UP:
                 if (e.getPointerCount() <= 2) scaling = false;
                 break;
             case MotionEvent.ACTION_UP:
-                if (!dragging && !scaling && mapData != null && mapData.brushMode) tap(e.getX(),e.getY());
+            case MotionEvent.ACTION_CANCEL:
                 dragging=false; scaling=false;
                 break;
         }
         return true;
+    }
+
+    /** 停止惯性滑动。 */
+    private void stopFling() {
+        removeCallbacks(flingRunnable);
+        flingVx = 0;
+        flingVy = 0;
     }
 
     // 选中一个格子（拆出独立方法，ACTION_DOWN 也能调用）
@@ -1271,11 +1355,7 @@ public class HexMapView extends View {
         int idx = y * mapData.width + x;
         // 省区笔刷：开启且已选省区时，点击地块即划入该省区
         if (mapData.provinceEditMode && mapData.provinceBrushSeed >= 0) {
-            mapData.ensureProvincesSize();
-            mapData.provinces[idx] = mapData.provinceBrushSeed;
-            mapData.editedCells.add(idx);
-            com.xckeji.bj.file.FileParser.patchProvince(mapData, idx);
-            invalidate();
+            paintProvinceAt(x, y);
             return;
         }
         if (mapData.brushMode) { applyBrush(x, y); return; }
@@ -1392,14 +1472,65 @@ public class HexMapView extends View {
             if (listener != null) listener.onTileSelected(x,y,mapData.getTile(x,y));
         }
     }
+
+    /** 省区笔刷：把单个地块划入当前选中的省区（可点、可按住拖动连续刷）。 */
+    private void paintProvinceAt(int x, int y) {
+        if (mapData == null || viewOnly) return;
+        if (x < 0 || x >= mapData.width || y < 0 || y >= mapData.height) return;
+        if (!provinceUndoSaved) {
+            mapData.saveProvinceUndo();
+            provinceUndoSaved = true;
+        }
+        int idx = y * mapData.width + x;
+        if (mapData.provinces == null || idx >= mapData.provinces.length) {
+            mapData.ensureProvincesSize();
+        }
+        if (mapData.provinces[idx] == mapData.provinceBrushSeed) return;
+        mapData.provinces[idx] = mapData.provinceBrushSeed;
+        mapData.editedCells.add(idx);
+        com.xckeji.bj.file.FileParser.patchProvince(mapData, idx);
+        invalidate();
+    }
     private class GestureListener extends GestureDetector.SimpleOnGestureListener {
-        @Override public boolean onSingleTapUp(MotionEvent e) { return true; }
+        @Override public boolean onDown(MotionEvent e) { return true; }
+        /** 单指拖动画面：超过系统触摸阈值才算拖动，不再 1px 就动。 */
+        @Override public boolean onScroll(MotionEvent e1, MotionEvent e2, float distanceX, float distanceY) {
+            if (mapData == null || scaling || e2.getPointerCount() > 1) return false;
+            if (mapData.brushMode && !viewOnly) return false; // 画笔模式下手指是用来画的
+            if (mapData.provinceEditMode && mapData.provinceBrushSeed >= 0 && !viewOnly) return false;
+            dragging = true;
+            stopFling();
+            offsetX -= distanceX;
+            offsetY -= distanceY;
+            clamp();
+            invalidate();
+            return true;
+        }
+        /** 单击（没有拖动）才选中/涂抹格子。 */
+        @Override public boolean onSingleTapUp(MotionEvent e) {
+            if (dragging || scaling || mapData == null || viewOnly) return true;
+            PointF h = p2h(e.getX(), e.getY());
+            if (h == null) return true;
+            int x = (int) h.x, y = (int) h.y;
+            if (x >= 0 && x < mapData.width && y >= 0 && y < mapData.height) selectCell(x, y);
+            return true;
+        }
+        /** 惯性滑动：松手后地图继续滑行一段。 */
+        @Override public boolean onFling(MotionEvent e1, MotionEvent e2, float velocityX, float velocityY) {
+            if (mapData == null || scaling || e2.getPointerCount() > 1) return false;
+            if (mapData.brushMode && !viewOnly) return false;
+            if (mapData.provinceEditMode && mapData.provinceBrushSeed >= 0 && !viewOnly) return false;
+            flingVx = velocityX;
+            flingVy = velocityY;
+            postDelayed(flingRunnable, 16);
+            return true;
+        }
         @Override public void onLongPress(MotionEvent e) {
             if (mapData == null || viewOnly) return; PointF h = p2h(e.getX(),e.getY()); if (h == null) return;
             int x = (int)h.x, y = (int)h.y; if (x>=0&&x<mapData.width&&y>=0&&y<mapData.height) { mapData.setBuildingId(x,y,0); if (selectedX==x&&selectedY==y&&listener!=null) listener.onTileSelected(x,y,mapData.getTile(x,y)); invalidate(); }
         }
     }
-    public void zoomIn() { float os=scale; scale*=1.3f; if(scale>3f)scale=3f; float f=scale/os, cx=getWidth()/2f, cy=getHeight()/2f; offsetX=cx-(cx-offsetX)*f; offsetY=cy-(cy-offsetY)*f; clamp(); invalidate(); }
+    public void zoomIn() { float os=scale; scale*=1.3f; if(scale>4.5f)scale=4.5f; float f=scale/os, cx=getWidth()/2f, cy=getHeight()/2f; offsetX=cx-(cx-offsetX)*f; offsetY=cy-(cy-offsetY)*f; clamp(); invalidate(); }
     public void zoomOut() { float os=scale; scale/=1.3f; if(scale<0.3f)scale=0.3f; float f=scale/os, cx=getWidth()/2f, cy=getHeight()/2f; offsetX=cx-(cx-offsetX)*f; offsetY=cy-(cy-offsetY)*f; clamp(); invalidate(); }
     public void resetView() { centerMap(); invalidate(); }
 }

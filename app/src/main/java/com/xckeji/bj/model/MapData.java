@@ -46,6 +46,12 @@ public class MapData {
     public int coordBase = 0;
     /** 城市/建筑记录列表（建筑段 32 字节/条，按文件顺序）。 */
     public java.util.List<Building> buildings = new java.util.ArrayList<>();
+    /** 地雷/陷阱记录列表（陷阱段 12 字节/条：坐标/军团/等级/血量）。 */
+    public java.util.List<Trap> traps = new java.util.ArrayList<>();
+    /** 新放置建筑的 32 字节草稿记录（地块索引 → raw），保存地图时按此写入，编辑字段不丢失。 */
+    public java.util.Map<Integer, byte[]> newBuildingRaws = new java.util.HashMap<>();
+    /** 省区操作撤销栈（每次省区绘制/新建前快照 provinces 数组）。 */
+    public final java.util.Stack<int[]> provinceUndoStack = new java.util.Stack<>();
 
     /** 建筑记录（32 字节：0x0 坐标、0x2 名称、0x4 类型、0x5 外观等）。 */
     public static class Building {
@@ -71,6 +77,17 @@ public class MapData {
             this.type = type;
             this.level = level;
         }
+    }
+
+    /** 地雷/陷阱记录（12 字节：0x0 坐标、0x2 军团、0x4 等级、0x6 血量、0x8 保留）。 */
+    public static class Trap {
+        public int index;   // 在陷阱段中的序号（用于写回）
+        public int x, y;    // 当前坐标
+        public int coord;   // 0x0 地块坐标（tile index）
+        public int legion;  // 0x2 所属军团（0xFFFF=中立）
+        public int level;   // 0x4 陷阱等级（官方 1~4）
+        public int hp;      // 0x6 陷阱血量（官方 = 60 × 等级）
+        public byte[] raw = new byte[12];
     }
 
     /** 军团记录（300 字节：0x0 序号、0x4 国家、0x14 控制、0x18 阵营、0x28 地块颜色等）。 */
@@ -140,6 +157,30 @@ public class MapData {
             java.util.Arrays.fill(belongs, (byte) 0xFF);
         }
     }
+
+    /** 省区操作前快照（每次绘制/新建前调用一次，最多保留 30 步）。 */
+    public void saveProvinceUndo() {
+        if (provinces == null || provinces.length == 0) return;
+        provinceUndoStack.push(provinces.clone());
+        if (provinceUndoStack.size() > 30) provinceUndoStack.remove(0);
+    }
+
+    public boolean canUndoProvince() {
+        return !provinceUndoStack.isEmpty();
+    }
+
+    /** 撤销最近一次省区操作；数组尺寸变化时整表替换，否则原位恢复。 */
+    public boolean undoProvince() {
+        if (!canUndoProvince()) return false;
+        int[] snap = provinceUndoStack.pop();
+        if (snap.length != provinces.length) {
+            provinces = snap;
+        } else {
+            System.arraycopy(snap, 0, provinces, 0, snap.length);
+        }
+        return true;
+    }
+
     public TerrainTile getTile(int x, int y) {
         if (x < 0 || x >= width || y < 0 || y >= height) return null;
         return tiles.get(y * width + x);
