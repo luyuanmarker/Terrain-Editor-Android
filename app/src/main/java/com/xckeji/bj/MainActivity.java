@@ -3890,7 +3890,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
             java.util.LinkedHashMap<Integer, ArmyConfig> uniq = new java.util.LinkedHashMap<>();
             for (ArmyConfig c : ArmyConfig.ALL) {
                 // 只显示 1~40 号兵种，41 及以后不显示
-                if (c != null && c.army >= 1 && c.army <= 40
+                if (c != null && c.army >= 1 && (c.army <= 40 || c.elite > 0)
                         && !uniq.containsKey(c.army)) uniq.put(c.army, c);
             }
             for (final ArmyConfig c : uniq.values()) {
@@ -3970,7 +3970,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
             java.util.LinkedHashMap<Integer, ArmyConfig> uniq = new java.util.LinkedHashMap<>();
             for (ArmyConfig c : ArmyConfig.ALL) {
                 // 只显示 1~40 号兵种，41 及以后不显示
-                if (c != null && c.army >= 1 && c.army <= 40
+                if (c != null && c.army >= 1 && (c.army <= 40 || c.elite > 0)
                         && !uniq.containsKey(c.army)) uniq.put(c.army, c);
             }
             for (final ArmyConfig c : uniq.values()) {
@@ -4167,7 +4167,8 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
                 java.util.LinkedHashMap<Integer, ArmyConfig> uniq = new java.util.LinkedHashMap<>();
                 if (ArmyConfig.ALL != null) {
                     for (ArmyConfig c : ArmyConfig.ALL) {
-                        if (c != null && c.army >= 1 && c.army <= 40 && !uniq.containsKey(c.army)) {
+                        if (c != null && c.army >= 1 && (c.army <= 40 || c.elite > 0)
+                                && !uniq.containsKey(c.army)) {
                             uniq.put(c.army, c);
                         }
                     }

@@ -14,6 +14,7 @@ public class ArmyConfig {
     public String name;
     public int army;        // BTL 兵种段 0x2 的兵种代码
     public int type;        // 兵种类别
+    public int elite;       // 1=精英部队
     public int minAttack, maxAttack;
     public int minRange, maxRange;
     public int hp, defence, mobility;
@@ -36,6 +37,7 @@ public class ArmyConfig {
                 c.name = o.optString("Name", "");
                 c.army = o.optInt("Army", 0);
                 c.type = o.optInt("Type", 0);
+                c.elite = o.optInt("Elite", 0);
                 c.minAttack = o.optInt("MinAttack", 0);
                 c.maxAttack = o.optInt("MaxAttack", 0);
                 c.minRange = o.optInt("MinRange", 0);

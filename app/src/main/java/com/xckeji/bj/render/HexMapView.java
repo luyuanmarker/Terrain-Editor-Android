@@ -66,6 +66,7 @@ public class HexMapView extends View {
     private Bitmap seaBmp;
     private Map<String, Bitmap> terrainBmps;
     private Map<Integer, Bitmap> legionBmps;
+    private final Map<Integer, Bitmap> legionBmpsR = new HashMap<>();
     private Map<Integer, Bitmap> flagBmps;
     private Map<Integer, Bitmap> buildingBmps;
     private Bitmap trapLandBmp, trapSeaBmp;
@@ -119,9 +120,12 @@ public class HexMapView extends View {
             seaBmp = load("map/sea.png");
             trapLandBmp = load("pixmap/buildmark/land_trap.png");
             trapSeaBmp = load("pixmap/buildmark/sea_trap.png");
-            for (int i = 1; i <= 38; i++) {
+            // 精英兵种：加载 1~128 号图标（含 41+ 精英），缺失时用 _r_ 变体兜底
+            for (int i = 1; i <= 128; i++) {
                 Bitmap b = load("legion/legion_icon_" + i + ".png");
                 if (b != null) legionBmps.put(i, b);
+                Bitmap br = load("legion/legion_icon_r_" + i + ".png");
+                if (br != null) legionBmpsR.put(i, br);
             }
             for (int i = 1; i <= 49; i++) {
                 Bitmap b = load("flag/flag_" + i + ".png");
@@ -254,6 +258,13 @@ public class HexMapView extends View {
     private String armyBadgeText(MapData.Army a) {
         int f = (a.raw != null && a.raw.length > 4) ? (a.raw[4] & 0xFF) : 1;
         return String.valueOf(f);
+    }
+
+    /** 兵种图标：优先普通 legion_icon_N，缺失时用 _r_ 变体。 */
+    private Bitmap armyIcon(int type) {
+        Bitmap b = legionBmps != null ? legionBmps.get(type) : null;
+        if (b == null) b = legionBmpsR.get(type);
+        return b;
     }
 
     /** 把整张地图按基准比例渲染成一张 PNG 位图（用于导出/截图分享）。 */
@@ -529,7 +540,7 @@ public class HexMapView extends View {
                     if (legionIcon == null) legionIcon = buildingBmps.get(11);
                 }
             } else if (legionBmps != null) {
-                legionIcon = legionBmps.get(a.type);
+                legionIcon = armyIcon(a.type);
             }
             float r = Math.max(4f, s * 0.38f);
             float iconSize = Math.max(10f, s * 1.3f);
@@ -1104,7 +1115,7 @@ public class HexMapView extends View {
                         if (legionIcon == null) legionIcon = buildingBmps.get(11);
                     }
                 } else if (legionBmps != null) {
-                    legionIcon = legionBmps.get(a.type);
+                    legionIcon = armyIcon(a.type);
                 }
                 float r = Math.max(4f, s * 0.38f);
                 float iconSize = Math.max(10f, s * 1.3f);
