@@ -70,6 +70,11 @@ public class HexMapView extends View {
     private Map<Integer, Bitmap> flagBmps;
     private Map<Integer, Bitmap> buildingBmps;
     private Bitmap trapLandBmp, trapSeaBmp;
+    // 设施/编制图标（仿枭雄：image/status）
+    private Bitmap facAirport, facDepot, facFactory, facLab, facLaunch, facNuclear;
+    private Bitmap antiair1, antiair2, antiair3, radarIcon, formationIcon;
+    private final Bitmap[] levelIcons = new Bitmap[5];
+    private final Paint formationBg = new Paint();
     private boolean imagesLoaded = false;
     private Bitmap borderSelectedBmp;
 
@@ -120,6 +125,20 @@ public class HexMapView extends View {
             seaBmp = load("map/sea.png");
             trapLandBmp = load("pixmap/buildmark/land_trap.png");
             trapSeaBmp = load("pixmap/buildmark/sea_trap.png");
+            facAirport = load("image/status/facility_airport.png");
+            facDepot = load("image/status/facility_depot.png");
+            facFactory = load("image/status/facility_factory.png");
+            facLab = load("image/status/facility_lab.png");
+            facLaunch = load("image/status/facility_launch.png");
+            facNuclear = load("image/status/facility_nuclear.png");
+            antiair1 = load("image/status/antiair_1x.png");
+            antiair2 = load("image/status/antiair_2x.png");
+            antiair3 = load("image/status/antiair_3x.png");
+            radarIcon = load("image/status/雷达圆.png");
+            formationIcon = load("image/status/formation.png");
+            for (int i = 1; i <= 4; i++) {
+                levelIcons[i] = load("image/status/lv_" + i + ".png");
+            }
             // 精英兵种：加载 1~128 号图标（含 41+ 精英），缺失时用 _r_ 变体兜底
             for (int i = 1; i <= 128; i++) {
                 Bitmap b = load("legion/legion_icon_" + i + ".png");
@@ -429,8 +448,135 @@ public class HexMapView extends View {
     private void drawDynamicOverlays(Canvas canvas) {
         drawArmyMarkers(canvas);
         drawTraps(canvas);
+        drawBuildingFacilities(canvas);
         drawCropRect(canvas);
         drawGuideImage(canvas);
+    }
+
+    /** 在 (px,py) 居中绘制小国旗（归属 -> 国家 -> flag_N.png），中立不画。 */
+    private void drawCountryFlag(Canvas canvas, float px, float py, float size, int legion) {
+        if (legion == 0xFF || legion == 0xFFFF || legion < 0
+                || mapData.legionCountries == null
+                || legion >= mapData.legionCountries.length || flagBmps == null) return;
+        Bitmap flag = flagBmps.get(mapData.legionCountries[legion]);
+        if (flag == null) return;
+        float fw = size;
+        float fh = fw * flag.getHeight() / (float) flag.getWidth();
+        canvas.drawBitmap(flag, null,
+                new RectF(px - fw / 2f, py - fh / 2f, px + fw / 2f, py + fh / 2f), bitmapPaint);
+    }
+
+    /** 兵种右下角：国旗 + 编制黑底块（仿枭雄布局：旗在右下角，编制块在旗左侧）。 */
+    private void drawFlagAndFormation(Canvas canvas, MapData.Army a,
+                                      float px, float py, float iconSize, float s, int legion) {
+        float fw = 0f, fh = 0f;
+        if (legion != 0xFF && legion >= 0 && mapData.legionCountries != null
+                && legion < mapData.legionCountries.length && flagBmps != null) {
+            Bitmap flag = flagBmps.get(mapData.legionCountries[legion]);
+            if (flag != null) {
+                fw = iconSize * 0.55f;
+                fh = fw * flag.getHeight() / (float) flag.getWidth();
+                canvas.drawBitmap(flag, null,
+                        new RectF(px + iconSize / 2f - fw, py + iconSize / 2f - fh,
+                                px + iconSize / 2f, py + iconSize / 2f), bitmapPaint);
+            }
+        }
+        // 编制：formation.png 重复显示 count 个（最多4，仿枭雄），黑底堆在右下角、旗子左侧
+        int count = (a.raw != null && a.raw.length > 4) ? (a.raw[4] & 0xFF) : 1;
+        if (count < 1) count = 1;
+        if (count > 4) count = 4;
+        if (formationIcon != null && s >= 6) {
+            float icon = s * 0.28f;
+            float pad = s * 0.04f;
+            float right = px + iconSize / 2f - (fw > 0 ? fw + s * 0.05f : 0);
+            float totalH = count * icon + (count - 1) * pad;
+            float left = right - icon;
+            float top = py + iconSize / 2f - totalH - s * 0.02f;
+            float m = s * 0.05f;
+            formationBg.setColor(0xB3000000);
+            canvas.drawRoundRect(new RectF(left - m, top - m, right + m, top + totalH + m),
+                    s * 0.08f, s * 0.08f, formationBg);
+            for (int i = 0; i < count; i++) {
+                float y = top + i * (icon + pad);
+                canvas.drawBitmap(formationIcon, null,
+                        new RectF(left, y, right, y + icon), bitmapPaint);
+            }
+        }
+    }
+
+    /** 建筑基础设施图标（仿枭雄）：设施网格在建筑上方，防空/雷达在右侧，建筑左上角小国旗。 */
+    private void drawBuildingFacilities(Canvas canvas) {
+        if (mapData == null || mapData.buildings == null || mapData.buildings.isEmpty()) return;
+        float s = hs();
+        if (s < 5f) return;
+        for (MapData.Building b : mapData.buildings) {
+            if (b == null || b.raw == null || b.raw.length < 0x20) continue;
+            float px = hcx(b.x), py = hcy(b.x, b.y);
+            if (px + s < 0 || px - s > getWidth() || py + s < 0 || py - s > getHeight()) continue;
+            byte[] raw = b.raw;
+            // 建筑国旗（左上角）：归属 -> 国家 -> flag
+            int bLegion = 0xFF;
+            int bidx = b.y * mapData.width + b.x;
+            if (mapData.belongs != null && bidx >= 0 && bidx < mapData.belongs.length) {
+                bLegion = mapData.belongs[bidx] & 0xFF;
+            }
+            drawCountryFlag(canvas, px - s * 0.50f, py - s * 0.44f, s * 0.46f, bLegion);
+            java.util.List<Bitmap> facs = new java.util.ArrayList<>();
+            java.util.List<Integer> facLv = new java.util.ArrayList<>();
+            if ((raw[0x1B] & 0xFF) > 0 && facAirport != null) { facs.add(facAirport); facLv.add(raw[0x1B] & 0xFF); }
+            if ((raw[0x1A] & 0xFF) > 0 && facDepot != null) { facs.add(facDepot); facLv.add(raw[0x1A] & 0xFF); }
+            if ((raw[0x18] & 0xFF) > 0 && facFactory != null) { facs.add(facFactory); facLv.add(raw[0x18] & 0xFF); }
+            if ((raw[0x19] & 0xFF) > 0 && facLab != null) { facs.add(facLab); facLv.add(raw[0x19] & 0xFF); }
+            if ((raw[0x1C] & 0xFF) > 0 && facLaunch != null) { facs.add(facLaunch); facLv.add(raw[0x1C] & 0xFF); }
+            if ((raw[0x1D] & 0xFF) > 0 && facNuclear != null) { facs.add(facNuclear); facLv.add(raw[0x1D] & 0xFF); }
+            if (!facs.isEmpty()) {
+                float icon = s * 0.5f;
+                float spacing = s * 0.05f;
+                int cols = 3;
+                int rows = (facs.size() + cols - 1) / cols;
+                float totalW = cols * icon + (cols - 1) * spacing;
+                float totalH = rows * icon + (rows - 1) * spacing;
+                float gx = px - totalW / 2f;
+                float gy = py - s * 0.72f - totalH / 2f;
+                for (int i = 0; i < facs.size(); i++) {
+                    int c = i % cols, r = i / cols;
+                    float x = gx + c * (icon + spacing);
+                    float y = gy + r * (icon + spacing);
+                    canvas.drawBitmap(facs.get(i), null, new RectF(x, y, x + icon, y + icon), bitmapPaint);
+                    int lv = facLv.get(i);
+                    if (lv >= 1 && lv <= 4 && levelIcons[lv] != null) {
+                        float li = icon * 0.62f;
+                        canvas.drawBitmap(levelIcons[lv], null,
+                                new RectF(x + icon - li * 0.55f, y + icon - li * 0.55f,
+                                        x + icon + li * 0.45f, y + icon + li * 0.45f), bitmapPaint);
+                    }
+                }
+            }
+            int antiair = raw[0x16] & 0xFF;
+            int radar = raw[0x17] & 0xFF;
+            if (antiair > 0) {
+                int tier = antiair / 10;
+                int lv = antiair % 10;
+                Bitmap aa = tier == 1 ? antiair1 : tier == 2 ? antiair2 : tier == 3 ? antiair3 : null;
+                if (aa != null) {
+                    float ai = s * 0.48f;
+                    float ax = px + s * 0.6f - ai;
+                    float ay = py - s * 0.28f - ai;
+                    if (radar == 2 && radarIcon != null) {
+                        canvas.drawBitmap(radarIcon, null,
+                                new RectF(ax, ay, ax + ai, ay + ai), bitmapPaint);
+                    }
+                    canvas.drawBitmap(aa, null,
+                            new RectF(ax, ay, ax + ai, ay + ai), bitmapPaint);
+                    if (lv >= 1 && lv <= 4 && levelIcons[lv] != null) {
+                        float li = ai * 0.6f;
+                        canvas.drawBitmap(levelIcons[lv], null,
+                                new RectF(ax + ai - li * 0.5f, ay + ai - li * 0.5f,
+                                        ax + ai + li * 0.5f, ay + ai + li * 0.5f), bitmapPaint);
+                    }
+                }
+            }
+        }
     }
 
     /** 地雷/陷阱标记：官方图标（海洋 sea_trap、陆地 land_trap），右上角标等级。 */
@@ -455,6 +601,8 @@ public class HexMapView extends View {
                 tp.setColor(0xFFb91c1c);
                 canvas.drawCircle(px, py, Math.max(4f, s * 0.32f), tp);
             }
+            // 地雷国旗（图标右下角）
+            drawCountryFlag(canvas, px + s * 0.42f, py + s * 0.34f, s * 0.32f, t.legion);
             // 等级角标（右上）
             if (s >= 6 && t.level > 0) {
                 float bx = px + s * 0.5f, by = py - s * 0.42f;
@@ -557,32 +705,8 @@ public class HexMapView extends View {
                 unitPaint.setColor(0xFFFFFFFF);
                 canvas.drawCircle(px, py, r, unitPaint);
             }
-            if (legion != 0xFF && legion >= 0 && mapData.legionCountries != null
-                    && legion < mapData.legionCountries.length && flagBmps != null) {
-                Bitmap flag = flagBmps.get(mapData.legionCountries[legion]);
-                if (flag != null) {
-                    float fw = iconSize * 0.95f;
-                    float fh = fw * flag.getHeight() / (float) flag.getWidth();
-                    canvas.drawBitmap(flag, null,
-                            new RectF(px - fw / 2f, py - iconSize / 2f - fh,
-                                    px + fw / 2f, py - iconSize / 2f), bitmapPaint);
-                }
-            }
-            if (s >= 6) {
-                float br = Math.max(5f, s * 0.24f);
-                float badgeX = px + iconSize / 2f - br * 0.35f;
-                float badgeY = py + iconSize / 2f - br * 0.35f;
-                Paint bgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-                bgPaint.setColor(0xD9000000);
-                canvas.drawCircle(badgeX, badgeY, br, bgPaint);
-                Paint numPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-                numPaint.setColor(0xFFFFFFFF);
-                numPaint.setTextSize(br * 1.15f);
-                numPaint.setTextAlign(Paint.Align.CENTER);
-                numPaint.setFakeBoldText(true);
-                canvas.drawText(armyBadgeText(a), badgeX,
-                        badgeY + numPaint.getTextSize() * 0.36f, numPaint);
-            }
+            // 右下角：国旗 + 编制黑底块（仿枭雄）
+            drawFlagAndFormation(canvas, a, px, py, iconSize, s, legion);
         }
     }
 
@@ -1133,34 +1257,8 @@ public class HexMapView extends View {
                     unitPaint.setColor(0xFFFFFFFF);
                     canvas.drawCircle(px, py, r, unitPaint);
                 }
-                // 国旗（部队国籍）：军团归属 -> 国家ID -> flag_N.png，画在图标上方
-                if (legion != 0xFF && legion >= 0 && mapData.legionCountries != null
-                        && legion < mapData.legionCountries.length && flagBmps != null) {
-                    Bitmap flag = flagBmps.get(mapData.legionCountries[legion]);
-                    if (flag != null) {
-                        float fw = iconSize * 0.95f;
-                        float fh = fw * flag.getHeight() / (float) flag.getWidth();
-                        canvas.drawBitmap(flag, null,
-                                new RectF(px - fw / 2f, py - iconSize / 2f - fh,
-                                        px + fw / 2f, py - iconSize / 2f), bitmapPaint);
-                    }
-                }
-                // 角标（图标右下角）：显示编制数字
-                if (s >= 6) {
-                    float br = Math.max(5f, s * 0.24f);
-                    float badgeX = px + iconSize / 2f - br * 0.35f;
-                    float badgeY = py + iconSize / 2f - br * 0.35f;
-                    Paint bgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-                    bgPaint.setColor(0xD9000000);
-                    canvas.drawCircle(badgeX, badgeY, br, bgPaint);
-                    Paint numPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-                    numPaint.setColor(0xFFFFFFFF);
-                    numPaint.setTextSize(br * 1.15f);
-                    numPaint.setTextAlign(Paint.Align.CENTER);
-                    numPaint.setFakeBoldText(true);
-                    canvas.drawText(armyBadgeText(a), badgeX,
-                            badgeY + numPaint.getTextSize() * 0.36f, numPaint);
-                }
+                // 右下角：国旗 + 编制黑底块（仿枭雄）
+                drawFlagAndFormation(canvas, a, px, py, iconSize, s, legion);
             }
         }
 
