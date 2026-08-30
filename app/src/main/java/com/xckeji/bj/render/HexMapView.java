@@ -51,8 +51,6 @@ public class HexMapView extends View {
     private Paint multiPaint;
     // 专门用于绘制位图的 Paint：固定白色（白色=不染色），避免残留颜色把贴图染花
     private final Paint bitmapPaint;
-    // 枭雄式归属色/省区色：Multiply 叠加（颜色层与纹理相乘，颜色×纹理）
-    private final Paint multiplyPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     // 性能优化：复用同一个 Path，避免每格每帧 new
     private final Path sharedPath = new Path();
     // 六边形贴图缓存：每个 (地形组,ID) 预渲染一次，避免每帧 clipPath
@@ -113,12 +111,6 @@ public class HexMapView extends View {
         bitmapPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         bitmapPaint.setFilterBitmap(true);
         bitmapPaint.setColor(0xFFFFFFFF);
-        if (android.os.Build.VERSION.SDK_INT >= 29) {
-            multiplyPaint.setBlendMode(android.graphics.BlendMode.MULTIPLY);
-        } else {
-            multiplyPaint.setXfermode(new android.graphics.PorterDuffXfermode(
-                    android.graphics.PorterDuff.Mode.MULTIPLY));
-        }
         gestureDetector = new GestureDetector(context, new GestureListener());
     }
 
@@ -432,20 +424,20 @@ public class HexMapView extends View {
                         }
                         c.restore();
                     }
-                    // 枭雄式覆盖层：省区视图=省区颜色、否则国家归属颜色，Multiply 与纹理相乘
+                    // 半透明覆盖层：省区视图=叠省区颜色且地形照常显示；否则叠国家归属颜色
                     if (provinceView) {
                         int pv = (mapData.provinces != null && cellIdx < mapData.provinces.length)
                                 ? mapData.provinces[cellIdx] : 0;
                         if (pv != 0 && pv != 0xFFFF) {
-                            multiplyPaint.setColor(provinceColor(pv) | 0xFF000000);
-                            c.drawPath(sharedPath, multiplyPaint);
+                            tilePaint.setColor((provinceColor(pv) & 0x00FFFFFF) | 0x66000000);
+                            c.drawPath(sharedPath, tilePaint);
                         }
                     } else if (ownershipTint) {
                         int leg = (provinceOwnerLegion != null && cellIdx < provinceOwnerLegion.length)
                                 ? provinceOwnerLegion[cellIdx] : 0xFF;
                         if (leg != 0xFF && leg >= 0 && leg < mapData.legionColors.length) {
-                            multiplyPaint.setColor(mapData.legionColors[leg] | 0xFF000000);
-                            c.drawPath(sharedPath, multiplyPaint);
+                            tilePaint.setColor((mapData.legionColors[leg] & 0x00FFFFFF) | 0x80000000);
+                            c.drawPath(sharedPath, tilePaint);
                         }
                     }
                     int bid = mapData.getBuildingId(x, y);
@@ -1120,20 +1112,20 @@ public class HexMapView extends View {
                     canvas.restore();
                 }
 
-                // 枭雄式覆盖层：省区视图=省区颜色、否则国家归属颜色，Multiply 与纹理相乘
+                // 半透明覆盖层：省区视图=叠省区颜色且地形照常显示；否则叠国家归属颜色
                 if (provinceView) {
                     int pv = (mapData.provinces != null && cellIdx < mapData.provinces.length)
                             ? mapData.provinces[cellIdx] : 0;
                     if (pv != 0 && pv != 0xFFFF) {
-                        multiplyPaint.setColor(provinceColor(pv) | 0xFF000000);
-                        canvas.drawPath(sharedPath, multiplyPaint);
+                        tilePaint.setColor((provinceColor(pv) & 0x00FFFFFF) | 0x66000000);
+                        canvas.drawPath(sharedPath, tilePaint);
                     }
                 } else if (ownershipTint) {
                     int leg = (provinceOwnerLegion != null && cellIdx < provinceOwnerLegion.length)
                             ? provinceOwnerLegion[cellIdx] : 0xFF;
                     if (leg != 0xFF && leg >= 0 && leg < mapData.legionColors.length) {
-                        multiplyPaint.setColor(mapData.legionColors[leg] | 0xFF000000);
-                        canvas.drawPath(sharedPath, multiplyPaint);
+                        tilePaint.setColor((mapData.legionColors[leg] & 0x00FFFFFF) | 0x80000000);
+                        canvas.drawPath(sharedPath, tilePaint);
                     }
                 }
 
