@@ -67,6 +67,7 @@ public class MapData {
         public int x, y;
         public int type;   // 兵种代码（ArmySettings 的 Army 字段）
         public int level;  // 等级
+        public int general; // 0x10 将领ID（uint16，0=无将领）
         public String name;
         public int index;          // 在兵种段中的序号（用于写回）
         public byte[] raw;         // 原始记录（版本1=48字节，版本2/3=64字节）

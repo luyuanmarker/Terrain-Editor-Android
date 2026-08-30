@@ -56,6 +56,7 @@ import androidx.core.content.ContextCompat;
 import com.xckeji.bj.file.FileParser;
 import com.xckeji.bj.model.ArmyConfig;
 import com.xckeji.bj.model.CountryData;
+import com.xckeji.bj.model.GeneralData;
 import com.xckeji.bj.model.MapData;
 import com.xckeji.bj.model.OperationHistory;
 import com.xckeji.bj.model.RandomMapGenerator;
@@ -395,6 +396,10 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         // 兵种数据必须在 buildUI() 之前加载，右侧面板的兵种图标栏才会显示图标
         try {
             ArmyConfig.load(readAssetBytes("json/ArmySettings.json"));
+        } catch (Exception ignored) {
+        }
+        try {
+            GeneralData.load(readAssetBytes("json/GeneralSettings.json"));
         } catch (Exception ignored) {
         }
         getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN);
@@ -4212,6 +4217,13 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
                 et.setPadding(6 * density, 4 * density, 6 * density, 4 * density);
                 armyEds[i] = et;
                 row.addView(et);
+                if ("将领".equals(fname) && army.general > 0) {
+                    TextView gname = new TextView(this);
+                    gname.setText("名字：" + GeneralData.name(army.general));
+                    gname.setTextSize(10);
+                    gname.setTextColor(0xFF9ca3af);
+                    row.addView(gname);
+                }
             }
             armyEditorArea.addView(row);
         }

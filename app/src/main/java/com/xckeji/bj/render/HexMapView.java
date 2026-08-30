@@ -69,6 +69,7 @@ public class HexMapView extends View {
     private Map<String, Bitmap> terrainBmps;
     private Map<Integer, Bitmap> legionBmps;
     private final Map<Integer, Bitmap> legionBmpsR = new HashMap<>();
+    private final Map<Integer, Bitmap> generalBmps = new HashMap<>();
     private Map<Integer, Bitmap> flagBmps;
     private Map<Integer, Bitmap> buildingBmps;
     private Bitmap trapLandBmp, trapSeaBmp;
@@ -292,6 +293,31 @@ public class HexMapView extends View {
         Bitmap b = legionBmps != null ? legionBmps.get(type) : null;
         if (b == null) b = legionBmpsR.get(type);
         return b;
+    }
+
+    /** 将领头像：按将领ID懒加载 assets/general/<id>.png，缓存复用。 */
+    private Bitmap generalPortrait(int generalId) {
+        if (generalId <= 0) return null;
+        Bitmap b = generalBmps.get(generalId);
+        if (b == null) {
+            b = load("general/" + generalId + ".png");
+            if (b != null) generalBmps.put(generalId, b);
+        }
+        return b;
+    }
+
+    /** 将领头像（仿枭雄 general 层）：画在单位上方，0.8 倍图集尺寸，Y 偏移 -65。 */
+    private void drawGeneralPortrait(Canvas canvas, MapData.Army a, float px, float py, float s) {
+        Bitmap img = generalPortrait(a.general);
+        if (img == null) return;
+        float sr = s / 50f;
+        float sw = img.getWidth() * 0.8f * sr;
+        float sh = img.getHeight() * 0.8f * sr;
+        if (sw < 2f) sw = 2f;
+        if (sh < 2f) sh = 2f;
+        float cx = px;
+        float cy = py - 65f * sr;
+        canvas.drawBitmap(img, null, new RectF(cx - sw / 2f, cy - sh / 2f, cx + sw / 2f, cy + sh / 2f), bitmapPaint);
     }
 
     /** 把整张地图按基准比例渲染成一张 PNG 位图（用于导出/截图分享）。 */
@@ -715,6 +741,8 @@ public class HexMapView extends View {
             }
             // 右下角：国旗 + 编制黑底块（仿枭雄）
             drawFlagAndFormation(canvas, a, px, py, iconSize, s, legion);
+            // 将领头像（仿枭雄 general 层）
+            drawGeneralPortrait(canvas, a, px, py, s);
         }
     }
 
@@ -1267,6 +1295,8 @@ public class HexMapView extends View {
                 }
                 // 右下角：国旗 + 编制黑底块（仿枭雄）
                 drawFlagAndFormation(canvas, a, px, py, iconSize, s, legion);
+                // 将领头像（仿枭雄 general 层）
+                drawGeneralPortrait(canvas, a, px, py, s);
             }
         }
 

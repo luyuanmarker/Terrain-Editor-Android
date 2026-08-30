@@ -289,6 +289,7 @@ public class FileParser {
                 a.index = i;
                 a.raw = new byte[recSize];
                 System.arraycopy(data, addr, a.raw, 0, recSize);
+                if (a.raw.length > 17) a.general = (a.raw[16] & 0xFF) | ((a.raw[17] & 0xFF) << 8);
                 ArmyConfig cfg = ArmyConfig.byArmy(type);
                 if (cfg != null) a.name = cfg.name;
                 mapData.armies.add(a);
@@ -1858,6 +1859,7 @@ public class FileParser {
             a.index = i;
             a.raw = new byte[rec];
             System.arraycopy(btl, addr, a.raw, 0, rec);
+            if (a.raw.length > 17) a.general = (a.raw[16] & 0xFF) | ((a.raw[17] & 0xFF) << 8);
             ArmyConfig cfg = ArmyConfig.byArmy(type);
             if (cfg != null) a.name = cfg.name;
             mapData.armies.add(a);
