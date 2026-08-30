@@ -202,7 +202,6 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
     private ArmyConfig pendingArmyType;
     private int pendingArmyLegion = -1;
     private boolean provinceViewOn = false; // 省规划视图需手动开启；默认只在原地形上叠半透明国家色
-    private boolean manualMulti = false;    // 手动多选模式：点击格子加入/移出选择
 
     private static final int[] LAND_TYPES = {1,2,3,4,5,6,7,8,9,10,11,12,13,14};
     private static final int[] NAVAL_TYPES = {15,16,17,18,19};
@@ -351,48 +350,6 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         Toast.makeText(this, "已清除多选", Toast.LENGTH_SHORT).show();
     }
 
-    // ===== 多选模式（仿枭雄 O 键）：点击格子加入/移出，随机所选地形 =====
-    private void toggleManualMulti() {
-        if (mapData == null) {
-            Toast.makeText(this, "请先加载地图", Toast.LENGTH_SHORT).show();
-            return;
-        }
-        manualMulti = !manualMulti;
-        mapData.multiSelectMode = manualMulti;
-        mapData.selectedBlocks.clear();
-        hexMapView.refresh();
-        Toast.makeText(this, manualMulti
-                        ? "多选模式：点击格子加入/移出选择（菜单再点一次退出）"
-                        : "已退出多选模式",
-                Toast.LENGTH_LONG).show();
-    }
-
-    private void randomizeSelectedTerrain() {
-        if (mapData == null) {
-            Toast.makeText(this, "请先加载地图", Toast.LENGTH_SHORT).show();
-            return;
-        }
-        if (!mapData.hasSelectedBlocks()) {
-            Toast.makeText(this, "请先多选一些格子（地图菜单 → 多选模式）", Toast.LENGTH_LONG).show();
-            return;
-        }
-        int[] groups = {0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 21, 22, 26, 30, 31};
-        java.util.Random rnd = new java.util.Random();
-        history.save(mapData);
-        for (int idx : mapData.selectedBlocks) {
-            if (idx < 0 || idx >= mapData.tiles.size()) continue;
-            int g = groups[rnd.nextInt(groups.length)];
-            byte[] pat = mapData.getTerrainPattern(g);
-            if (pat != null) mapData.tiles.get(idx).parseFromBytes(pat, 0);
-            else mapData.tiles.get(idx).setTerrain(g);
-            mapData.editedCells.add(idx);
-        }
-        mapData.finishPaint(mapData.selectedBlocks);
-        hexMapView.refresh();
-        updateInfo();
-        Toast.makeText(this, "已随机所选 " + mapData.selectedBlocks.size() + " 个格子", Toast.LENGTH_SHORT).show();
-    }
-
     // ===== 校验并修复（规则与枭雄一致） =====
     private void validateAndFixDialog() {
         if (mapData == null || mapData.btlOriginalData == null) {
@@ -420,6 +377,606 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
             updateInfo();
         });
         b.show();
+    }
+
+    // ================= BTL 地图库（首页左侧） =================
+    private FrameLayout mapLibOverlay;
+    private LinearLayout onlineListBox, localListBox;
+    private TextView mapLibStatus;
+
+    private void showMapLibraryDialog() {
+        if (mapLibOverlay == null) buildMapLibraryOverlay();
+        mapLibOverlay.setVisibility(View.VISIBLE);
+        mapLibStatus.setText("加载中…");
+        refreshOnlineList();
+        refreshLocalList();
+    }
+
+    private void buildMapLibraryOverlay() {
+        final int density = (int) getResources().getDisplayMetrics().density;
+        mapLibOverlay = new FrameLayout(this);
+        android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable(
+                android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
+                new int[]{0xFF0f172a, 0xFF1e293b});
+        mapLibOverlay.setBackground(bg);
+        rootFrame.addView(mapLibOverlay, new FrameLayout.LayoutParams(-1, -1));
+
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(16 * density, 12 * density, 16 * density, 12 * density);
+        mapLibOverlay.addView(root, new FrameLayout.LayoutParams(-1, -1));
+
+        LinearLayout head = new LinearLayout(this);
+        head.setOrientation(LinearLayout.HORIZONTAL);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        TextView title = new TextView(this);
+        title.setText("BTL 地图库");
+        title.setTextSize(18);
+        title.setTextColor(Color.WHITE);
+        title.setTypeface(null, android.graphics.Typeface.BOLD);
+        head.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
+        Button close = new Button(this);
+        close.setText("✕ 关闭");
+        close.setTextColor(Color.WHITE);
+        close.setBackgroundColor(Color.parseColor("#475569"));
+        close.setOnClickListener(v -> mapLibOverlay.setVisibility(View.GONE));
+        head.addView(close);
+        root.addView(head);
+
+        LinearLayout tabs = new LinearLayout(this);
+        tabs.setOrientation(LinearLayout.HORIZONTAL);
+        final Button tabOnline = new Button(this);
+        tabOnline.setText("在线地图库");
+        tabOnline.setAllCaps(false);
+        tabOnline.setTextColor(Color.WHITE);
+        tabOnline.setBackgroundColor(Color.parseColor("#1e5fa8"));
+        final Button tabLocal = new Button(this);
+        tabLocal.setText("已下载");
+        tabLocal.setAllCaps(false);
+        tabLocal.setTextColor(Color.WHITE);
+        tabLocal.setBackgroundColor(Color.parseColor("#3a3a40"));
+        tabs.addView(tabOnline, new LinearLayout.LayoutParams(0, -2, 1));
+        tabs.addView(tabLocal, new LinearLayout.LayoutParams(0, -2, 1));
+        root.addView(tabs);
+
+        final LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        root.addView(content, new LinearLayout.LayoutParams(-1, 0, 1f));
+
+        // —— 在线页 ——
+        LinearLayout online = new LinearLayout(this);
+        online.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout ops = new LinearLayout(this);
+        ops.setOrientation(LinearLayout.HORIZONTAL);
+        Button refreshBtn = new Button(this);
+        refreshBtn.setText("刷新列表");
+        refreshBtn.setTextColor(Color.WHITE);
+        refreshBtn.setBackgroundColor(Color.parseColor("#1e5fa8"));
+        refreshBtn.setOnClickListener(v -> refreshOnlineList());
+        Button uploadBtn = new Button(this);
+        uploadBtn.setText("上传地图…");
+        uploadBtn.setTextColor(Color.WHITE);
+        uploadBtn.setBackgroundColor(Color.parseColor("#16a34a"));
+        uploadBtn.setOnClickListener(v -> pickMapToUpload());
+        ops.addView(refreshBtn, new LinearLayout.LayoutParams(0, -2, 1));
+        ops.addView(uploadBtn, new LinearLayout.LayoutParams(0, -2, 1));
+        online.addView(ops);
+        onlineListBox = new LinearLayout(this);
+        onlineListBox.setOrientation(LinearLayout.VERTICAL);
+        android.widget.ScrollView osv = new android.widget.ScrollView(this);
+        osv.addView(onlineListBox, new android.widget.ScrollView.LayoutParams(-1, -2));
+        online.addView(osv, new LinearLayout.LayoutParams(-1, 0, 1f));
+
+        // —— 已下载页 ——
+        LinearLayout local = new LinearLayout(this);
+        local.setOrientation(LinearLayout.VERTICAL);
+        TextView localHint = new TextView(this);
+        localHint.setText("已下载的地图存在应用私有目录，点「打开」进编辑器。");
+        localHint.setTextSize(11);
+        localHint.setTextColor(0xFF94a3b8);
+        local.addView(localHint);
+        localListBox = new LinearLayout(this);
+        localListBox.setOrientation(LinearLayout.VERTICAL);
+        android.widget.ScrollView lsv = new android.widget.ScrollView(this);
+        lsv.addView(localListBox, new android.widget.ScrollView.LayoutParams(-1, -2));
+        local.addView(lsv, new LinearLayout.LayoutParams(-1, 0, 1f));
+
+        mapLibStatus = new TextView(this);
+        mapLibStatus.setTextSize(12);
+        mapLibStatus.setTextColor(0xFF94a3b8);
+        mapLibStatus.setPadding(0, 8 * density, 0, 0);
+        root.addView(mapLibStatus);
+
+        final Runnable showOnline = () -> {
+            content.removeAllViews();
+            content.addView(online, new LinearLayout.LayoutParams(-1, -1));
+            tabOnline.setBackgroundColor(Color.parseColor("#1e5fa8"));
+            tabLocal.setBackgroundColor(Color.parseColor("#3a3a40"));
+        };
+        final Runnable showLocal = () -> {
+            content.removeAllViews();
+            content.addView(local, new LinearLayout.LayoutParams(-1, -1));
+            tabOnline.setBackgroundColor(Color.parseColor("#3a3a40"));
+            tabLocal.setBackgroundColor(Color.parseColor("#1e5fa8"));
+            refreshLocalList();
+        };
+        tabOnline.setOnClickListener(v -> showOnline.run());
+        tabLocal.setOnClickListener(v -> showLocal.run());
+        showOnline.run();
+    }
+
+    private java.io.File mapLibDir() {
+        java.io.File d = new java.io.File(getFilesDir(), "map_library");
+        if (!d.exists()) d.mkdirs();
+        return d;
+    }
+
+    private void refreshOnlineList() {
+        onlineListBox.removeAllViews();
+        mapLibStatus.setText("正在连接服务器…");
+        new Thread(() -> {
+            try {
+                byte[] data = httpGet(MAPLIB_BASE + "/list.php");
+                org.json.JSONObject o = new org.json.JSONObject(new String(data, "UTF-8"));
+                final org.json.JSONArray maps = o.getJSONArray("maps");
+                runOnUiThread(() -> {
+                    onlineListBox.removeAllViews();
+                    if (maps.length() == 0) {
+                        mapLibStatus.setText("服务器上还没有地图，点「上传地图…」分享第一张");
+                        return;
+                    }
+                    for (int i = 0; i < maps.length(); i++) {
+                        try {
+                            onlineListBox.addView(buildOnlineRow(maps.getJSONObject(i)));
+                        } catch (Exception ignored) {
+                        }
+                    }
+                    mapLibStatus.setText("共 " + maps.length() + " 张地图（点条目下载并打开）");
+                });
+            } catch (Exception e) {
+                runOnUiThread(() -> mapLibStatus.setText("连接失败：" + e.getMessage()));
+            }
+        }).start();
+    }
+
+    private View buildOnlineRow(final org.json.JSONObject m) {
+        final int density = (int) getResources().getDisplayMetrics().density;
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, 8 * density, 0, 8 * density);
+        final ImageView thumb = new ImageView(this);
+        thumb.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        thumb.setLayoutParams(new LinearLayout.LayoutParams(64 * density, 64 * density));
+        thumb.setBackgroundColor(0xFF2a2a2f);
+        row.addView(thumb);
+        LinearLayout info = new LinearLayout(this);
+        info.setOrientation(LinearLayout.VERTICAL);
+        info.setPadding(10 * density, 0, 0, 0);
+        TextView name = new TextView(this);
+        name.setText(m.optString("name", m.optString("file", "")));
+        name.setTextSize(15);
+        name.setTextColor(Color.WHITE);
+        name.setTypeface(null, android.graphics.Typeface.BOLD);
+        info.addView(name);
+        TextView meta = new TextView(this);
+        meta.setText("作者 " + m.optString("author", "匿名") + " · " + m.optString("time", ""));
+        meta.setTextSize(11);
+        meta.setTextColor(0xFF94a3b8);
+        info.addView(meta);
+        if (!m.optString("desc", "").isEmpty()) {
+            TextView desc = new TextView(this);
+            desc.setText(m.optString("desc", ""));
+            desc.setTextSize(12);
+            desc.setTextColor(0xFFcbd5e1);
+            desc.setMaxLines(2);
+            info.addView(desc);
+        }
+        row.addView(info, new LinearLayout.LayoutParams(0, -2, 1));
+        row.setClickable(true);
+        row.setOnClickListener(v -> downloadMap(m.optString("id", ""), m.optString("file", "")));
+        final String thumbUrl = m.optString("thumb_url", "");
+        if (!thumbUrl.isEmpty()) loadRemoteImage(thumbUrl, thumb);
+        LinearLayout wrap = new LinearLayout(this);
+        wrap.setOrientation(LinearLayout.VERTICAL);
+        wrap.addView(row);
+        View div = new View(this);
+        div.setBackgroundColor(0x22FFFFFF);
+        div.setLayoutParams(new LinearLayout.LayoutParams(-1, 1));
+        wrap.addView(div);
+        return wrap;
+    }
+
+    private void downloadMap(final String id, final String file) {
+        if (id.isEmpty()) return;
+        mapLibStatus.setText("下载中：" + file);
+        new Thread(() -> {
+            try {
+                byte[] data = httpGet(MAPLIB_BASE + "/get.php?id=" + id);
+                if (data == null || data.length < 128) {
+                    runOnUiThread(() -> mapLibStatus.setText("下载失败：文件无效"));
+                    return;
+                }
+                final java.io.File out = new java.io.File(mapLibDir(), sanitizeFile(file));
+                java.io.FileOutputStream fos = new java.io.FileOutputStream(out);
+                fos.write(data);
+                fos.close();
+                runOnUiThread(() -> {
+                    try {
+                        loadBtlBytes(data, out.getName());
+                        mapLibStatus.setText("已下载并打开：" + out.getName());
+                        refreshLocalList();
+                    } catch (Exception e) {
+                        mapLibStatus.setText("打开失败：" + e.getMessage());
+                    }
+                });
+            } catch (Exception e) {
+                runOnUiThread(() -> mapLibStatus.setText("下载失败：" + e.getMessage()));
+            }
+        }).start();
+    }
+
+    private void refreshLocalList() {
+        if (localListBox == null) return;
+        localListBox.removeAllViews();
+        java.io.File[] files = mapLibDir().listFiles();
+        if (files == null || files.length == 0) {
+            TextView empty = new TextView(this);
+            empty.setText("还没有下载过地图");
+            empty.setTextSize(12);
+            empty.setTextColor(0xFF94a3b8);
+            localListBox.addView(empty);
+            return;
+        }
+        java.util.Arrays.sort(files, (a, b) -> Long.compare(b.lastModified(), a.lastModified()));
+        for (final java.io.File f : files) {
+            if (!f.isFile()) continue;
+            localListBox.addView(buildLocalRow(f));
+        }
+    }
+
+    private View buildLocalRow(final java.io.File f) {
+        final int density = (int) getResources().getDisplayMetrics().density;
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, 8 * density, 0, 8 * density);
+        LinearLayout info = new LinearLayout(this);
+        info.setOrientation(LinearLayout.VERTICAL);
+        info.setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1));
+        TextView name = new TextView(this);
+        name.setText(f.getName());
+        name.setTextSize(14);
+        name.setTextColor(Color.WHITE);
+        info.addView(name);
+        TextView meta = new TextView(this);
+        meta.setText((f.length() / 1024) + " KB · " + new java.text.SimpleDateFormat("MM-dd HH:mm",
+                java.util.Locale.ROOT).format(new java.util.Date(f.lastModified())));
+        meta.setTextSize(11);
+        meta.setTextColor(0xFF94a3b8);
+        info.addView(meta);
+        row.addView(info);
+        Button open = new Button(this);
+        open.setText("打开");
+        open.setTextSize(11);
+        open.setTextColor(Color.WHITE);
+        open.setBackgroundColor(Color.parseColor("#1e5fa8"));
+        open.setOnClickListener(v -> {
+            try {
+                loadBtlBytes(readFileBytes(f), f.getName());
+            } catch (Exception e) {
+                Toast.makeText(this, "打开失败: " + e.getMessage(), Toast.LENGTH_LONG).show();
+            }
+        });
+        Button exp = new Button(this);
+        exp.setText("导出");
+        exp.setTextSize(11);
+        exp.setTextColor(Color.WHITE);
+        exp.setBackgroundColor(Color.parseColor("#ea580c"));
+        exp.setOnClickListener(v -> exportLocalMap(f));
+        Button del = new Button(this);
+        del.setText("删除");
+        del.setTextSize(11);
+        del.setTextColor(Color.WHITE);
+        del.setBackgroundColor(Color.parseColor("#dc2626"));
+        del.setOnClickListener(v -> {
+            f.delete();
+            refreshLocalList();
+            Toast.makeText(this, "已删除本地文件", Toast.LENGTH_SHORT).show();
+        });
+        row.addView(open);
+        row.addView(exp);
+        row.addView(del);
+        LinearLayout wrap = new LinearLayout(this);
+        wrap.setOrientation(LinearLayout.VERTICAL);
+        wrap.addView(row);
+        View div = new View(this);
+        div.setBackgroundColor(0x22FFFFFF);
+        div.setLayoutParams(new LinearLayout.LayoutParams(-1, 1));
+        wrap.addView(div);
+        return wrap;
+    }
+
+    private void exportLocalMap(java.io.File f) {
+        try {
+            java.io.File dir = new java.io.File(
+                    android.os.Environment.getExternalStoragePublicDirectory(
+                            android.os.Environment.DIRECTORY_DOWNLOADS), "map_library");
+            if (!dir.exists()) dir.mkdirs();
+            java.io.File out = new java.io.File(dir, f.getName());
+            copyFile(f, out);
+            Toast.makeText(this, "已导出到 " + out.getPath(), Toast.LENGTH_LONG).show();
+        } catch (Exception e) {
+            Toast.makeText(this, "导出失败: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    // ===== 上传 =====
+    private void pickMapToUpload() {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("*/*");
+        startActivityForResult(i, REQUEST_MAPLIB_UPLOAD);
+    }
+
+    private void handleMapLibUpload(android.net.Uri uri) {
+        try {
+            final String displayName = queryDisplayName(uri);
+            byte[] bytes = readUriBytes(uri);
+            final byte[] btl = bytes;
+            if (btl == null || btl.length < 128) {
+                Toast.makeText(this, "文件无效", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            loadBtlBytes(btl, displayName);
+            showUploadDialog(displayName, btl);
+        } catch (Exception e) {
+            Toast.makeText(this, "读取失败: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void showUploadDialog(final String defaultName, final byte[] btlBytes) {
+        LinearLayout l = new LinearLayout(this);
+        l.setOrientation(LinearLayout.VERTICAL);
+        l.setPadding(28, 12, 28, 12);
+        final EditText nameEt = new EditText(this);
+        nameEt.setHint("地图名称");
+        nameEt.setText(defaultName);
+        styleDialogEdit(nameEt);
+        final EditText authorEt = new EditText(this);
+        authorEt.setHint("作者昵称");
+        styleDialogEdit(authorEt);
+        final EditText descEt = new EditText(this);
+        descEt.setHint("简介（可选）");
+        styleDialogEdit(descEt);
+        l.addView(labelOf("地图名称"));
+        l.addView(nameEt);
+        l.addView(labelOf("作者昵称"));
+        l.addView(authorEt);
+        l.addView(labelOf("简介"));
+        l.addView(descEt);
+        AlertDialog.Builder b = new AlertDialog.Builder(this, R.style.DarkDialog);
+        b.setTitle("上传地图到地图库");
+        b.setView(l);
+        b.setNegativeButton("取消", null);
+        b.setPositiveButton("上传", (d, w) -> {
+            String name = nameEt.getText().toString().trim();
+            String author = authorEt.getText().toString().trim();
+            String desc = descEt.getText().toString().trim();
+            if (name.isEmpty()) name = defaultName;
+            if (author.isEmpty()) author = "匿名";
+            uploadMapToServer(btlBytes, name, author, desc);
+        });
+        b.show();
+    }
+
+    private TextView labelOf(String s) {
+        TextView tv = new TextView(this);
+        tv.setText(s);
+        tv.setTextSize(11);
+        tv.setTextColor(0xFF9ca3af);
+        tv.setPadding(0, 10, 0, 2);
+        return tv;
+    }
+
+    private void styleDialogEdit(EditText et) {
+        et.setTextColor(0xFFe5e7eb);
+        et.setTextSize(13);
+        et.setBackgroundColor(Color.parseColor("#2a2a2f"));
+        et.setPadding(10, 8, 10, 8);
+    }
+
+    private void uploadMapToServer(final byte[] btlBytes, final String name,
+                                   final String author, final String desc) {
+        mapLibStatus.setText("正在生成缩略图…");
+        new Thread(() -> {
+            try {
+                final byte[] thumb = renderThumbPng();
+                runOnUiThread(() -> mapLibStatus.setText("正在上传…"));
+                final java.util.Map<String, String> fields = new java.util.LinkedHashMap<>();
+                fields.put("name", name);
+                fields.put("author", author);
+                fields.put("desc", desc);
+                final String resp = httpUpload(MAPLIB_BASE + "/upload.php", fields,
+                        "btl", "map.btl", btlBytes,
+                        thumb != null ? "thumb" : null, thumb != null ? "thumb.png" : null, thumb);
+                org.json.JSONObject o = new org.json.JSONObject(resp);
+                runOnUiThread(() -> {
+                    if (o.optBoolean("ok", false)) {
+                        mapLibStatus.setText("上传成功：" + o.optString("name", name));
+                        refreshOnlineList();
+                    } else {
+                        mapLibStatus.setText("上传失败：" + o.optString("error", "未知错误"));
+                    }
+                });
+            } catch (Exception e) {
+                runOnUiThread(() -> mapLibStatus.setText("上传失败：" + e.getMessage()));
+            }
+        }).start();
+    }
+
+    /** 用当前打开的整图渲染出缩略图 PNG（与编辑器显示一致）。 */
+    private byte[] renderThumbPng() {
+        try {
+            if (hexMapView == null || hexMapView.getMapData() == null) return null;
+            Bitmap full = hexMapView.renderFullMap();
+            if (full == null) return null;
+            int w = full.getWidth(), h = full.getHeight();
+            int nw = 320;
+            int nh = Math.max(1, (int) (h * (nw / (float) w)));
+            Bitmap small = Bitmap.createScaledBitmap(full, nw, nh, true);
+            if (small != full) full.recycle();
+            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+            small.compress(Bitmap.CompressFormat.PNG, 90, bos);
+            small.recycle();
+            return bos.toByteArray();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private void loadBtlBytes(byte[] data, String fileName) throws Exception {
+        MapData md = FileParser.loadFile(data, fileName);
+        mapData = md;
+        hexMapView.setMapData(md);
+        hexMapView.refresh();
+        enterEditorAfterLoad();
+        updateInfo();
+        updateBtnState();
+        currentFileName = fileName;
+        if (fileInfoView != null) fileInfoView.setText("文件: " + fileName);
+    }
+
+    private static String sanitizeFile(String name) {
+        String s = name == null ? "map.btl" : name.replaceAll("[^A-Za-z0-9._\\-]", "_");
+        if (!s.toLowerCase().endsWith(".btl")) s += ".btl";
+        return s;
+    }
+
+    private static byte[] readFileBytes(java.io.File f) throws java.io.IOException {
+        java.io.FileInputStream in = new java.io.FileInputStream(f);
+        byte[] data = new byte[(int) f.length()];
+        int off = 0;
+        while (off < data.length) {
+            int n = in.read(data, off, data.length - off);
+            if (n < 0) break;
+            off += n;
+        }
+        in.close();
+        return data;
+    }
+
+    private static void copyFile(java.io.File src, java.io.File dst) throws java.io.IOException {
+        java.io.FileInputStream in = new java.io.FileInputStream(src);
+        java.io.FileOutputStream out = new java.io.FileOutputStream(dst);
+        byte[] buf = new byte[65536];
+        int n;
+        while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+        in.close();
+        out.close();
+    }
+
+    private String queryDisplayName(android.net.Uri uri) {
+        try {
+            android.database.Cursor c = getContentResolver().query(uri, null, null, null, null);
+            if (c != null) {
+                int idx = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME);
+                if (idx >= 0 && c.moveToFirst()) {
+                    String n = c.getString(idx);
+                    c.close();
+                    return n;
+                }
+                c.close();
+            }
+        } catch (Exception ignored) {
+        }
+        return "map.btl";
+    }
+
+    private byte[] readUriBytes(android.net.Uri uri) throws java.io.IOException {
+        java.io.InputStream in = getContentResolver().openInputStream(uri);
+        java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+        byte[] buf = new byte[65536];
+        int n;
+        while ((n = in.read(buf)) > 0) bos.write(buf, 0, n);
+        in.close();
+        return bos.toByteArray();
+    }
+
+    // ===== HTTP 工具 =====
+    private static byte[] httpGet(String url) throws Exception {
+        java.net.HttpURLConnection c = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
+        c.setConnectTimeout(12000);
+        c.setReadTimeout(12000);
+        c.setRequestMethod("GET");
+        java.io.InputStream in = c.getInputStream();
+        java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+        byte[] buf = new byte[65536];
+        int n;
+        while ((n = in.read(buf)) > 0) bos.write(buf, 0, n);
+        in.close();
+        c.disconnect();
+        return bos.toByteArray();
+    }
+
+    private static String httpUpload(String url, java.util.Map<String, String> fields,
+                                     String fileField, String fileName, byte[] fileBytes,
+                                     String thumbField, String thumbName, byte[] thumbBytes) throws Exception {
+        String boundary = "----wc4lib" + System.currentTimeMillis();
+        java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+        java.io.DataOutputStream out = new java.io.DataOutputStream(bos);
+        for (java.util.Map.Entry<String, String> e : fields.entrySet()) {
+            out.writeBytes("--" + boundary + "\r\n");
+            out.writeBytes("Content-Disposition: form-data; name=\"" + e.getKey() + "\"\r\n\r\n");
+            out.writeBytes(e.getValue() + "\r\n");
+        }
+        out.writeBytes("--" + boundary + "\r\n");
+        out.writeBytes("Content-Disposition: form-data; name=\"" + fileField + "\"; filename=\"" + fileName + "\"\r\n");
+        out.writeBytes("Content-Type: application/octet-stream\r\n\r\n");
+        out.write(fileBytes);
+        out.writeBytes("\r\n");
+        if (thumbField != null && thumbBytes != null) {
+            out.writeBytes("--" + boundary + "\r\n");
+            out.writeBytes("Content-Disposition: form-data; name=\"" + thumbField + "\"; filename=\"" + thumbName + "\"\r\n");
+            out.writeBytes("Content-Type: image/png\r\n\r\n");
+            out.write(thumbBytes);
+            out.writeBytes("\r\n");
+        }
+        out.writeBytes("--" + boundary + "--\r\n");
+        out.flush();
+        byte[] body = bos.toByteArray();
+
+        java.net.HttpURLConnection c = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
+        c.setConnectTimeout(15000);
+        c.setReadTimeout(20000);
+        c.setDoOutput(true);
+        c.setRequestMethod("POST");
+        c.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
+        c.setFixedLengthStreamingMode(body.length);
+        java.io.OutputStream os = c.getOutputStream();
+        os.write(body);
+        os.close();
+        java.io.InputStream in = c.getInputStream();
+        java.io.ByteArrayOutputStream r = new java.io.ByteArrayOutputStream();
+        byte[] buf = new byte[65536];
+        int n;
+        while ((n = in.read(buf)) > 0) r.write(buf, 0, n);
+        in.close();
+        c.disconnect();
+        return new String(r.toByteArray(), "UTF-8");
+    }
+
+    private void loadRemoteImage(final String url, final ImageView iv) {
+        new Thread(() -> {
+            try {
+                final Bitmap bm = BitmapFactory.decodeStream(
+                        (java.io.InputStream) new java.net.URL(url).getContent());
+                runOnUiThread(() -> {
+                    if (bm != null) iv.setImageBitmap(bm);
+                });
+            } catch (Exception ignored) {
+            }
+        }).start();
     }
 
     // ===== 数据段列表（仿枭雄：援军/空袭/首都/天气/放置/战略/空中支援） =====
@@ -1802,6 +2359,25 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         title.setPadding(0, 0, 0, 40);
         col.addView(title, 0);
 
+        // 首页左侧：BTL 地图库（在线下载 / 上传分享）
+        Button mapLibBtn = new Button(this);
+        mapLibBtn.setText("BTL地图库");
+        mapLibBtn.setTextSize(13);
+        mapLibBtn.setTextColor(Color.WHITE);
+        mapLibBtn.setAllCaps(false);
+        android.graphics.drawable.GradientDrawable mlbg = new android.graphics.drawable.GradientDrawable();
+        mlbg.setColor(0xCC1E3A8A);
+        mlbg.setCornerRadius(18);
+        mlbg.setStroke(2, 0x66FFFFFF);
+        mapLibBtn.setBackground(mlbg);
+        FrameLayout.LayoutParams mlp = new FrameLayout.LayoutParams(
+                (int) (190 * density), (int) (46 * density),
+                Gravity.LEFT | Gravity.CENTER_VERTICAL);
+        mlp.leftMargin = 14 * density;
+        mapLibBtn.setLayoutParams(mlp);
+        mapLibBtn.setOnClickListener(v -> showMapLibraryDialog());
+        homeOverlay.addView(mapLibBtn);
+
         rootFrame.addView(homeOverlay);
     }
 
@@ -2117,13 +2693,8 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         acts.add(() -> randomizeTerrainDialog());
         acts.add(() -> randomizeArmiesDialog());
         acts.add(() -> showBuildingListOverlay());
-        acts.add(() -> toggleManualMulti());
-        acts.add(() -> randomizeSelectedTerrain());
-        acts.add(() -> clearMultiSelection());
         showDropdownMenu(anchor, new String[]{"校验并修复…", "扩展地图…", "截取地图…", "随机地形…",
-                "随机兵力…", "城市列表…",
-                (manualMulti ? "✔ 多选模式" : "多选模式"),
-                "随机所选地形…", "清除多选"}, acts);
+                "随机兵力…", "城市列表…"}, acts);
     }
 
     private void showViewPopup(View anchor) {
@@ -3657,6 +4228,8 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
     private static final int REQUEST_GUIDE = 301;
     private static final int REQUEST_CONQUEST_BIN = 302;
     private static final int REQUEST_APK = 305;
+    private static final int REQUEST_MAPLIB_UPLOAD = 306;
+    private static final String MAPLIB_BASE = "https://dx.xckeji.xyz/map_library";
     private void importOverlay() {
         if (mapData == null) { Toast.makeText(this, "请先加载地图", Toast.LENGTH_SHORT).show(); return; }
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
@@ -5231,13 +5804,6 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
 
     @Override public void onTileSelected(int x, int y, TerrainTile tile) {
         playSelectSfx();
-        if (manualMulti && mapData != null) {
-            int idx = y * mapData.width + x;
-            mapData.toggleBlockSelection(idx);
-            hexMapView.refresh();
-            updateInfo();
-            return;
-        }
         if (addingArmy && pendingArmyType != null && mapData != null) {
             try {
                 byte[] raw = buildNewArmyRaw(x, y, pendingArmyType);
@@ -6202,6 +6768,10 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
     @Override
     protected void onActivityResult(int req,int res,Intent data){
         super.onActivityResult(req,res,data);
+        if (req == REQUEST_MAPLIB_UPLOAD && res == RESULT_OK && data != null && data.getData() != null) {
+            handleMapLibUpload(data.getData());
+            return;
+        }
         if(req==REQUEST_OPEN&&res==RESULT_OK&&data!=null&&data.getData()!=null){
             try{Uri uri=data.getData();FileInputStream fis=(FileInputStream)getContentResolver().openInputStream(uri);byte[] buf=new byte[fis.available()];fis.read(buf);fis.close();
                 String name=uri.getLastPathSegment();if(name!=null&&name.contains("/"))name=name.substring(name.lastIndexOf('/')+1);if(name==null)name="打开的文件";
