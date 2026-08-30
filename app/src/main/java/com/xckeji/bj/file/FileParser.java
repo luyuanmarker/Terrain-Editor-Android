@@ -318,6 +318,136 @@ public class FileParser {
             }
         }
         parseTraps(mapData, data, header);
+        computeTailStarts(mapData, header);
+    }
+
+    /** 尾段起始偏移：建筑 → 兵种 → 陷阱 → 方案 → 天气 → 事件 → 援军 → 空袭 → 放置甲/乙 → 战略 → 空中支援 → 首都。 */
+    public static void computeTailStarts(MapData mapData, BtlHeaderInfo h) {
+        int cursor = h.buildingStart + h.buildingCount * 32
+                + h.armyCount * armyRecSize(h.version)
+                + h.mineCount * 12;
+        mapData.planStart = cursor;
+        cursor += h.planCount * 16;
+        mapData.weatherStart = cursor;
+        cursor += h.weatherCount * 16;
+        mapData.eventStart = cursor;
+        cursor += h.eventCount * 44;
+        mapData.reinforceStart = cursor;
+        cursor += h.reinforceCount * (h.version == 1 ? 80 : 104);
+        mapData.airstrikeStart = cursor;
+        cursor += h.airstrikeCount * 20;
+        mapData.placementAStart = cursor;
+        cursor += h.placementCountA * 8;
+        mapData.placementBStart = cursor;
+        cursor += h.placementCountB * 8;
+        mapData.strategyStart = cursor;
+        cursor += h.strategyCount * 16;
+        mapData.airSupportStart = cursor;
+        cursor += h.airSupportCount * 16;
+        mapData.capitalStart = cursor;
+    }
+
+    private static int le16(byte[] d, int o) {
+        return (d[o] & 0xFF) | ((d[o + 1] & 0xFF) << 8);
+    }
+
+    private static int le32(byte[] d, int o) {
+        return (d[o] & 0xFF) | ((d[o + 1] & 0xFF) << 8)
+                | ((d[o + 2] & 0xFF) << 16) | ((d[o + 3] & 0xFF) << 24);
+    }
+
+    /** 校验并修复（规则与枭雄一致）：将领=0 时军衔/HP等级/技能/胸章/勋章须为 0；将领!=0 时军衔/HP等级不能为 0；
+     *  编制 1-4、方向 0/1；援军同规则。返回问题列表（已就地修复）。 */
+    public static java.util.List<String> validateAndFix(MapData mapData) {
+        java.util.List<String> issues = new java.util.ArrayList<>();
+        if (mapData == null || mapData.btlOriginalData == null) return issues;
+        byte[] data = mapData.btlOriginalData;
+        BtlHeaderInfo h = parseBTLHeader(data);
+        int rec = armyRecSize(h.version);
+        int armyStart = h.buildingStart + h.buildingCount * 32;
+        for (int i = 0; i < h.armyCount; i++) {
+            int addr = armyStart + i * rec;
+            if (addr + rec > data.length) break;
+            int coord = le16(data, addr) - mapData.coordBase;
+            int type = data[addr + 2] & 0xFF;
+            int comp = data[addr + 4] & 0xFF;
+            int dir = data[addr + 5] & 0xFF;
+            int general = le16(data, addr + 16);
+            boolean fixed = false;
+            String tag = "兵种#" + (i + 1) + "(" + coord + ") ";
+            if (type != 0) {
+                if (comp < 1 || comp > 4) { issues.add(tag + "编制=" + comp + " 需 1-4"); data[addr + 4] = 1; fixed = true; }
+                if (dir > 1) { issues.add(tag + "方向=" + dir + " 需 0/1"); data[addr + 5] = 0; fixed = true; }
+            } else if ((data[addr + 3] & 0xFF) != 0) {
+                issues.add(tag + "兵种为0 等级应为0"); data[addr + 3] = 0; fixed = true;
+            }
+            if (general == 0) {
+                if ((data[addr + 18] & 0xFF) != 0) { issues.add(tag + "将领为0 军衔应0"); data[addr + 18] = 0; fixed = true; }
+                if ((data[addr + 19] & 0xFF) != 0) { issues.add(tag + "将领为0 HP等级应0"); data[addr + 19] = 0; fixed = true; }
+                for (int f = 0x14; f <= 0x1B && f + 1 <= rec; f++) {
+                    if ((data[addr + f] & 0xFF) != 0) { issues.add(tag + "将领为0 技能/胸章应0 @" + Integer.toHexString(f)); data[addr + f] = 0; fixed = true; }
+                }
+                for (int f = 0x30; f <= 0x35 && f + 1 <= rec; f++) {
+                    if ((data[addr + f] & 0xFF) != 0) { issues.add(tag + "将领为0 勋章/勋带应0 @" + Integer.toHexString(f)); data[addr + f] = 0; fixed = true; }
+                }
+            } else {
+                if ((data[addr + 18] & 0xFF) == 0) { issues.add(tag + "将领" + general + " 军衔不能为0"); data[addr + 18] = 1; fixed = true; }
+                if ((data[addr + 19] & 0xFF) == 0) { issues.add(tag + "将领" + general + " HP等级不能为0"); data[addr + 19] = 1; fixed = true; }
+            }
+            if (fixed) {
+                for (MapData.Army a : mapData.armies) {
+                    if (a.index == i && a.raw != null && a.raw.length >= rec) {
+                        System.arraycopy(data, addr, a.raw, 0, rec);
+                    }
+                }
+            }
+        }
+        computeTailStarts(mapData, h);
+        int reinfStart = mapData.reinforceStart;
+        int rsize = h.version == 1 ? 80 : 104;
+        for (int i = 0; i < h.reinforceCount; i++) {
+            int addr = reinfStart + i * rsize;
+            if (addr + rsize > data.length) break;
+            int general = le32(data, addr + 28);
+            String tag = "援军#" + (i + 1) + "(" + le16(data, addr) + ") ";
+            boolean fixed = false;
+            if (general == 0) {
+                if (le32(data, addr + 32) != 0) { issues.add(tag + "将领为0 军衔应0"); put32(data, addr + 32, 0); fixed = true; }
+                if (le32(data, addr + 36) != 0) { issues.add(tag + "将领为0 HP等级应0"); put32(data, addr + 36, 0); fixed = true; }
+                for (int f = 40; f <= 72 && f + 4 <= rsize; f += 4) {
+                    if (le32(data, addr + f) != 0) { issues.add(tag + "将领为0 技能/胸章应0 @" + Integer.toHexString(f)); put32(data, addr + f, 0); fixed = true; }
+                }
+                if (rsize >= 104) {
+                    for (int f = 80; f <= 100 && f + 4 <= rsize; f += 4) {
+                        if (le32(data, addr + f) != 0) { issues.add(tag + "将领为0 勋章/勋带应0 @" + Integer.toHexString(f)); put32(data, addr + f, 0); fixed = true; }
+                    }
+                }
+            } else {
+                if (le32(data, addr + 32) == 0) { issues.add(tag + "将领" + general + " 军衔不能为0"); put32(data, addr + 32, 1); fixed = true; }
+                if (le32(data, addr + 36) == 0) { issues.add(tag + "将领" + general + " HP等级不能为0"); put32(data, addr + 36, 1); fixed = true; }
+            }
+            if (fixed) { /* 援军无内存副本，直接改原始数据即可 */ }
+        }
+        return issues;
+    }
+
+    private static void put32(byte[] d, int o, int v) {
+        d[o] = (byte) (v & 0xFF);
+        d[o + 1] = (byte) ((v >> 8) & 0xFF);
+        d[o + 2] = (byte) ((v >> 16) & 0xFF);
+        d[o + 3] = (byte) ((v >> 24) & 0xFF);
+    }
+
+    /** 通用尾段记录写回：把 raw 覆盖到 btlOriginalData 对应位置（坐标字段如需重映射请自行处理）。 */
+    public static void patchTailRecord(MapData mapData, int start, int index, int size, byte[] raw) throws IOException {
+        if (mapData == null || mapData.btlOriginalData == null || raw == null || raw.length != size) {
+            throw new IOException("尾段数据无效");
+        }
+        int addr = start + index * size;
+        if (addr < 0 || addr + size > mapData.btlOriginalData.length) {
+            throw new IOException("尾段越界");
+        }
+        System.arraycopy(raw, 0, mapData.btlOriginalData, addr, size);
     }
 
     /** 解析陷阱段（12 字节/条：0x0 坐标、0x2 军团、0x4 等级、0x6 血量、0x8 保留）。 */

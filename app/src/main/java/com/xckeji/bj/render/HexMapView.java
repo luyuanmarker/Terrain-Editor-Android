@@ -34,6 +34,14 @@ public class HexMapView extends View {
     private boolean provinceView = false;
     // 国家颜色半透明覆盖（默认开启）：在地形上叠一层归属颜色，不遮挡地形
     private boolean ownershipTint = true;
+    // 分层显示开关（仿枭雄 editor.json）
+    private boolean showTerrainArt = true;
+    private boolean showBuildings = true;
+    private boolean showArmies = true;
+    private boolean showFlags = true;
+    private boolean showGenerals = true;
+    private boolean showFacilities = true;
+    private boolean showLabels = true;
     // 纯移动模式：只允许拖动/缩放画面，点击不选中、不编辑
     private boolean viewOnly = false;
     // 省规划视图：每个地块所在省份解析后的归属军团（0xFF=无归属），
@@ -264,6 +272,22 @@ public class HexMapView extends View {
         invalidate();
     }
 
+    // ===== 分层显示开关（仿枭雄） =====
+    public void setShowTerrainArt(boolean v) { showTerrainArt = v; fullMapDirty = true; invalidate(); }
+    public void setShowBuildings(boolean v) { showBuildings = v; fullMapDirty = true; invalidate(); }
+    public void setShowArmies(boolean v) { showArmies = v; invalidate(); }
+    public void setShowFlags(boolean v) { showFlags = v; invalidate(); }
+    public void setShowGenerals(boolean v) { showGenerals = v; invalidate(); }
+    public void setShowFacilities(boolean v) { showFacilities = v; invalidate(); }
+    public void setShowLabels(boolean v) { showLabels = v; invalidate(); }
+    public boolean isShowTerrainArt() { return showTerrainArt; }
+    public boolean isShowBuildings() { return showBuildings; }
+    public boolean isShowArmies() { return showArmies; }
+    public boolean isShowFlags() { return showFlags; }
+    public boolean isShowGenerals() { return showGenerals; }
+    public boolean isShowFacilities() { return showFacilities; }
+    public boolean isShowLabels() { return showLabels; }
+
     public boolean isProvinceView() {
         return provinceView;
     }
@@ -441,7 +465,7 @@ public class HexMapView extends View {
                         }
                     }
                     int bid = mapData.getBuildingId(x, y);
-                    if (bid > 0 && buildingBmps != null) {
+                    if (showBuildings && bid > 0 && buildingBmps != null) {
                         Bitmap bb = buildingBmps.get(bid);
                         if (bb != null) {
                             c.save();
@@ -532,7 +556,8 @@ public class HexMapView extends View {
 
     /** 建筑基础设施图标（仿枭雄）：设施网格在建筑上方，防空/雷达在右侧，建筑左上角小国旗。 */
     private void drawBuildingFacilities(Canvas canvas) {
-        if (mapData == null || mapData.buildings == null || mapData.buildings.isEmpty()) return;
+        if (mapData == null || mapData.buildings == null || mapData.buildings.isEmpty()
+                || !showFacilities || !showBuildings) return;
         float s = hs();
         if (s < 5f) return;
         for (MapData.Building b : mapData.buildings) {
@@ -695,7 +720,7 @@ public class HexMapView extends View {
 
     /** 兵种标记（军团色圆标/图标 + 国旗 + 等级角标）。 */
     private void drawArmyMarkers(Canvas canvas) {
-        if (mapData.armies == null) return;
+        if (mapData.armies == null || !showArmies) return;
         for (MapData.Army a : mapData.armies) {
             if (a == null) continue;
             float px = hcx(a.x), py = hcy(a.x, a.y), s = hs();
@@ -731,10 +756,10 @@ public class HexMapView extends View {
                 unitPaint.setColor(0xFFFFFFFF);
                 canvas.drawCircle(px, py, r, unitPaint);
             }
-            // 右下角：国旗 + 编制黑底块（仿枭雄）
-            drawFlagAndFormation(canvas, a, px, py, iconSize, s, legion);
+            // 右下角：国旗 + 编制黑底块（仿枭雄；国旗可单独关）
+            if (showFlags) drawFlagAndFormation(canvas, a, px, py, iconSize, s, legion);
             // 将领头像（仿枭雄 general 层）
-            drawGeneralPortrait(canvas, a, px, py, s);
+            if (showGenerals) drawGeneralPortrait(canvas, a, px, py, s);
         }
     }
 
@@ -1189,7 +1214,7 @@ public class HexMapView extends View {
                 }
                 // 6. 建筑（铺满六角格，clipPath裁剪）
                 int bid = mapData.getBuildingId(x, y);
-                if (bid > 0 && buildingBmps != null) {
+                if (showBuildings && bid > 0 && buildingBmps != null) {
                     Bitmap bb = buildingBmps.get(bid);
                     if (bb != null) {
                         canvas.save();
@@ -1205,7 +1230,7 @@ public class HexMapView extends View {
         }
 
         // 省区视图：在每个省的代表位置显示省区编号文字（颜色看不懂时看编号）
-        if (provinceView && mapData.provinces != null) {
+        if (provinceView && showLabels && mapData.provinces != null) {
             int n = mapData.getTotalTiles();
             java.util.Map<Integer, float[]> centers = new java.util.HashMap<>();
             java.util.Map<Integer, int[]> counts = new java.util.HashMap<>();
@@ -1285,10 +1310,10 @@ public class HexMapView extends View {
                     unitPaint.setColor(0xFFFFFFFF);
                     canvas.drawCircle(px, py, r, unitPaint);
                 }
-                // 右下角：国旗 + 编制黑底块（仿枭雄）
-                drawFlagAndFormation(canvas, a, px, py, iconSize, s, legion);
+                // 右下角：国旗 + 编制黑底块（仿枭雄；国旗可单独关）
+                if (showFlags) drawFlagAndFormation(canvas, a, px, py, iconSize, s, legion);
                 // 将领头像（仿枭雄 general 层）
-                drawGeneralPortrait(canvas, a, px, py, s);
+                if (showGenerals) drawGeneralPortrait(canvas, a, px, py, s);
             }
         }
 

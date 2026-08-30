@@ -120,6 +120,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
     private EditText[] dataCityEds;
     private android.widget.Spinner[] dataCitySpinners;
     private android.widget.Spinner armyFormationSp;
+    private android.widget.Spinner armyAiSp, armyMoraleSp, armyBadgeSp, armyTransportSp;
     private boolean dataPanelOpen = false;
     private String dataTab = "army";
     private LinearLayout provinceListBox;
@@ -201,6 +202,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
     private ArmyConfig pendingArmyType;
     private int pendingArmyLegion = -1;
     private boolean provinceViewOn = false; // 省规划视图需手动开启；默认只在原地形上叠半透明国家色
+    private boolean manualMulti = false;    // 手动多选模式：点击格子加入/移出选择
 
     private static final int[] LAND_TYPES = {1,2,3,4,5,6,7,8,9,10,11,12,13,14};
     private static final int[] NAVAL_TYPES = {15,16,17,18,19};
@@ -214,11 +216,13 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         {"军衔", "u8", "0x12"}, {"爵位", "u8", "0x13"}, {"胸章一", "u8", "0x14"},
         {"胸章二", "u8", "0x15"}, {"胸章三", "u8", "0x16"}, {"技能等级1", "u8", "0x17"},
         {"技能等级2", "u8", "0x18"}, {"技能等级3", "u8", "0x19"}, {"技能等级4", "u8", "0x1A"},
-        {"技能等级5", "u8", "0x1B"}, {"关键据点", "u8", "0x1C"}, {"方针", "u8", "0x1D"},
+        {"技能等级5", "u8", "0x1B"}, {"关键据点", "u8", "0x1C"}, {"AI行动模式", "u8", "0x1D"},
         {"运输船", "u8", "0x1E"}, {"仇恨值", "u16", "0x20"}, {"移动目标", "u16", "0x22"},
         {"行为方案", "u16", "0x24"}, {"改变回合", "u16", "0x26"}, {"士气", "u8", "0x28"},
-        {"士气持续回合", "u8", "0x29"}, {"关联事件", "u8", "0x2A"}, {"金盾标志", "u8", "0x2B"},
-        {"固守距离", "i32", "0x2C"}
+        {"士气持续回合", "u8", "0x29"}, {"关联事件", "u8", "0x2A"}, {"等级标志显示", "u8", "0x2B"},
+        {"固守距离", "i32", "0x2C"}, {"勋章一", "u8", "0x30"}, {"勋章二", "u8", "0x31"},
+        {"勋章三", "u8", "0x32"}, {"勋带一", "u8", "0x33"}, {"勋带二", "u8", "0x34"},
+        {"勋带三", "u8", "0x35"}
     };
 
     /** 城市/建筑 32 字节记录字段：名称 / 类型 / 偏移（0x4=类型，对应 building_N.png）。 */
@@ -346,6 +350,368 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         updateInfo();
         Toast.makeText(this, "已清除多选", Toast.LENGTH_SHORT).show();
     }
+
+    // ===== 多选模式（仿枭雄 O 键）：点击格子加入/移出，随机所选地形 =====
+    private void toggleManualMulti() {
+        if (mapData == null) {
+            Toast.makeText(this, "请先加载地图", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        manualMulti = !manualMulti;
+        mapData.multiSelectMode = manualMulti;
+        mapData.selectedBlocks.clear();
+        hexMapView.refresh();
+        Toast.makeText(this, manualMulti
+                        ? "多选模式：点击格子加入/移出选择（菜单再点一次退出）"
+                        : "已退出多选模式",
+                Toast.LENGTH_LONG).show();
+    }
+
+    private void randomizeSelectedTerrain() {
+        if (mapData == null) {
+            Toast.makeText(this, "请先加载地图", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (!mapData.hasSelectedBlocks()) {
+            Toast.makeText(this, "请先多选一些格子（地图菜单 → 多选模式）", Toast.LENGTH_LONG).show();
+            return;
+        }
+        int[] groups = {0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 21, 22, 26, 30, 31};
+        java.util.Random rnd = new java.util.Random();
+        history.save(mapData);
+        for (int idx : mapData.selectedBlocks) {
+            if (idx < 0 || idx >= mapData.tiles.size()) continue;
+            int g = groups[rnd.nextInt(groups.length)];
+            byte[] pat = mapData.getTerrainPattern(g);
+            if (pat != null) mapData.tiles.get(idx).parseFromBytes(pat, 0);
+            else mapData.tiles.get(idx).setTerrain(g);
+            mapData.editedCells.add(idx);
+        }
+        mapData.finishPaint(mapData.selectedBlocks);
+        hexMapView.refresh();
+        updateInfo();
+        Toast.makeText(this, "已随机所选 " + mapData.selectedBlocks.size() + " 个格子", Toast.LENGTH_SHORT).show();
+    }
+
+    // ===== 校验并修复（规则与枭雄一致） =====
+    private void validateAndFixDialog() {
+        if (mapData == null || mapData.btlOriginalData == null) {
+            Toast.makeText(this, "请先加载地图", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        java.util.List<String> issues = FileParser.validateAndFix(mapData);
+        AlertDialog.Builder b = new AlertDialog.Builder(this, R.style.DarkDialog);
+        b.setTitle("校验结果（自动修复）");
+        android.widget.ScrollView sv = new android.widget.ScrollView(this);
+        TextView tv = new TextView(this);
+        tv.setTextSize(12);
+        tv.setTextColor(0xFFd1d5db);
+        tv.setPadding(24, 12, 24, 12);
+        if (issues.isEmpty()) {
+            tv.setText("没有发现问题，数据正常。");
+        } else {
+            tv.setText("发现 " + issues.size() + " 项问题，已全部自动修复：\n\n"
+                    + String.join("\n", issues));
+        }
+        sv.addView(tv);
+        b.setView(sv);
+        b.setPositiveButton("确定", (d, w) -> {
+            hexMapView.refresh();
+            updateInfo();
+        });
+        b.show();
+    }
+
+    // ===== 数据段列表（仿枭雄：援军/空袭/首都/天气/放置/战略/空中支援） =====
+    private void showTailSectionsDialog() {
+        if (mapData == null || mapData.btlOriginalData == null) {
+            Toast.makeText(this, "请先加载地图", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        FileParser.BtlHeaderInfo h = FileParser.parseBTLHeader(mapData.btlOriginalData);
+        final int density = (int) getResources().getDisplayMetrics().density;
+        final String[][] sections = {
+                {"方案", String.valueOf(h.planCount), "plan"},
+                {"天气", String.valueOf(h.weatherCount), "weather"},
+                {"援军", String.valueOf(h.reinforceCount), "reinforce"},
+                {"空袭", String.valueOf(h.airstrikeCount), "airstrike"},
+                {"放置甲", String.valueOf(h.placementCountA), "placementA"},
+                {"放置乙", String.valueOf(h.placementCountB), "placementB"},
+                {"战略建设", String.valueOf(h.strategyCount), "strategy"},
+                {"空中支援", String.valueOf(h.airSupportCount), "airSupport"},
+                {"国家首都", String.valueOf(h.capitalCount), "capital"},
+        };
+        AlertDialog.Builder b = new AlertDialog.Builder(this, R.style.DarkDialog);
+        b.setTitle("数据段列表");
+        LinearLayout l = new LinearLayout(this);
+        l.setOrientation(LinearLayout.VERTICAL);
+        l.setPadding(24, 12, 24, 12);
+        for (final String[] s : sections) {
+            TextView row = new TextView(this);
+            row.setText(s[0] + "（" + s[1] + " 条）");
+            row.setTextSize(14);
+            row.setTextColor(0xFFe2e8f0);
+            row.setPadding(0, 10 * density, 0, 10 * density);
+            row.setClickable(true);
+            row.setOnClickListener(v -> showTailEntryList(s[0], s[2]));
+            l.addView(row);
+            View div = new View(this);
+            div.setBackgroundColor(0x22FFFFFF);
+            div.setLayoutParams(new LinearLayout.LayoutParams(-1, 1));
+            l.addView(div);
+        }
+        android.widget.ScrollView sv = new android.widget.ScrollView(this);
+        sv.addView(l);
+        b.setView(sv);
+        b.setPositiveButton("关闭", null);
+        b.show();
+    }
+
+    private void showTailEntryList(final String title, final String kind) {
+        if (mapData == null) return;
+        final int density = (int) getResources().getDisplayMetrics().density;
+        int start = startOf(kind);
+        int count = countOf(kind);
+        final int size = sizeOf(kind);
+        if (start < 0) { Toast.makeText(this, "无此数据段", Toast.LENGTH_SHORT).show(); return; }
+        AlertDialog.Builder b = new AlertDialog.Builder(this, R.style.DarkDialog);
+        b.setTitle(title + "（" + count + " 条）");
+        LinearLayout l = new LinearLayout(this);
+        l.setOrientation(LinearLayout.VERTICAL);
+        l.setPadding(24, 12, 24, 12);
+        final int startF = start;
+        for (int i = 0; i < count; i++) {
+            final int idx = i;
+            String key = keyText(kind, startF + i * size);
+            TextView row = new TextView(this);
+            row.setText("#" + (i + 1) + "  " + key);
+            row.setTextSize(13);
+            row.setTextColor(0xFFcbd5e1);
+            row.setPadding(0, 8 * density, 0, 8 * density);
+            row.setClickable(true);
+            row.setOnClickListener(v -> showTailRecordEditor(title, kind, idx, size, startF));
+            l.addView(row);
+        }
+        android.widget.ScrollView sv = new android.widget.ScrollView(this);
+        sv.addView(l);
+        b.setView(sv);
+        b.setNegativeButton("返回", null);
+        b.show();
+    }
+
+    private int startOf(String kind) {
+        switch (kind) {
+            case "plan": return mapData.planStart;
+            case "weather": return mapData.weatherStart;
+            case "reinforce": return mapData.reinforceStart;
+            case "airstrike": return mapData.airstrikeStart;
+            case "placementA": return mapData.placementAStart;
+            case "placementB": return mapData.placementBStart;
+            case "strategy": return mapData.strategyStart;
+            case "airSupport": return mapData.airSupportStart;
+            case "capital": return mapData.capitalStart;
+        }
+        return -1;
+    }
+
+    private int countOf(String kind) {
+        FileParser.BtlHeaderInfo h = FileParser.parseBTLHeader(mapData.btlOriginalData);
+        switch (kind) {
+            case "plan": return h.planCount;
+            case "weather": return h.weatherCount;
+            case "reinforce": return h.reinforceCount;
+            case "airstrike": return h.airstrikeCount;
+            case "placementA": return h.placementCountA;
+            case "placementB": return h.placementCountB;
+            case "strategy": return h.strategyCount;
+            case "airSupport": return h.airSupportCount;
+            case "capital": return h.capitalCount;
+        }
+        return 0;
+    }
+
+    private int sizeOf(String kind) {
+        FileParser.BtlHeaderInfo h = FileParser.parseBTLHeader(mapData.btlOriginalData);
+        switch (kind) {
+            case "reinforce": return h.version == 1 ? 80 : 104;
+            case "airstrike": return 20;
+            case "placementA":
+            case "placementB": return 8;
+            case "capital": return 4;
+        }
+        return 16;
+    }
+
+    private String keyText(String kind, int addr) {
+        byte[] d = mapData.btlOriginalData;
+        if (addr < 0 || addr + 8 > d.length) return "越界";
+        switch (kind) {
+            case "weather": return "回合" + readAt(d, addr + 8, "u32") + " 类型" + readAt(d, addr, "u32");
+            case "reinforce": return "坐标" + readAt(d, addr, "u16") + " 兵种" + readAt(d, addr + 4, "u16")
+                    + " 将领" + readAt(d, addr + 28, "u32") + " 出现回合" + readAt(d, addr + 76, "u32");
+            case "airstrike": return "坐标" + readAt(d, addr, "u32") + " 兵种" + readAt(d, addr + 4, "u16")
+                    + " 军团" + readAt(d, addr + 12, "u32") + " 回合" + readAt(d, addr + 16, "u32");
+            case "placementA":
+            case "placementB": return "坐标" + readAt(d, addr, "u32") + " 方向" + readAt(d, addr + 4, "u8");
+            case "strategy": return "军团" + readAt(d, addr, "u32") + " 建设代码" + readAt(d, addr + 12, "u32");
+            case "airSupport": return "空军" + readAt(d, addr, "u32") + " 弹药" + readAt(d, addr + 4, "u32")
+                    + " 军团" + readAt(d, addr + 8, "u32");
+            case "capital": return "地块坐标" + readAt(d, addr, "u32");
+        }
+        return "";
+    }
+
+    private static int readAt(byte[] d, int o, String type) {
+        if (o < 0 || o + 4 > d.length) return 0;
+        switch (type) {
+            case "u8": return d[o] & 0xFF;
+            case "u16": return (d[o] & 0xFF) | ((d[o + 1] & 0xFF) << 8);
+            default: return (d[o] & 0xFF) | ((d[o + 1] & 0xFF) << 8)
+                    | ((d[o + 2] & 0xFF) << 16) | ((d[o + 3] & 0xFF) << 24);
+        }
+    }
+
+    private void showTailRecordEditor(final String title, final String kind,
+                                      final int index, final int size, final int start) {
+        final String[][] schema = tailSchema(kind);
+        final byte[] raw = new byte[size];
+        int addr = start + index * size;
+        if (addr + size > mapData.btlOriginalData.length) {
+            Toast.makeText(this, "数据越界", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        System.arraycopy(mapData.btlOriginalData, addr, raw, 0, size);
+        final EditText[] eds = new EditText[schema.length];
+        LinearLayout l = new LinearLayout(this);
+        l.setOrientation(LinearLayout.VERTICAL);
+        l.setPadding(28, 12, 28, 12);
+        for (int i = 0; i < schema.length; i++) {
+            TextView lb = new TextView(this);
+            lb.setText(schema[i][0] + "（" + schema[i][1] + " @" + schema[i][2] + "）");
+            lb.setTextSize(11);
+            lb.setTextColor(0xFF9ca3af);
+            l.addView(lb);
+            EditText et = new EditText(this);
+            et.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+            et.setText(String.valueOf(readAt(raw, Integer.decode(schema[i][2]), schema[i][1])));
+            et.setTextColor(0xFFe5e7eb);
+            et.setTextSize(13);
+            et.setBackgroundColor(Color.parseColor("#2a2a2f"));
+            l.addView(et);
+            eds[i] = et;
+        }
+        android.widget.ScrollView sv = new android.widget.ScrollView(this);
+        sv.addView(l);
+        AlertDialog.Builder b = new AlertDialog.Builder(this, R.style.DarkDialog);
+        b.setTitle(title + " #" + (index + 1));
+        b.setView(sv);
+        b.setNegativeButton("取消", null);
+        b.setPositiveButton("保存", (d, w) -> {
+            try {
+                for (int i = 0; i < schema.length; i++) {
+                    int val = eds[i].getText().toString().trim().isEmpty()
+                            ? 0 : Integer.parseInt(eds[i].getText().toString().trim());
+                    int off = Integer.decode(schema[i][2]);
+                    writeAt(raw, off, schema[i][1], val);
+                }
+                FileParser.patchTailRecord(mapData, start, index, size, raw);
+                hexMapView.refresh();
+                updateInfo();
+                Toast.makeText(this, "已保存 " + title + " #" + (index + 1), Toast.LENGTH_SHORT).show();
+            } catch (Exception e) {
+                Toast.makeText(this, "保存失败: " + e.getMessage(), Toast.LENGTH_LONG).show();
+            }
+        });
+        b.show();
+    }
+
+    private static void writeAt(byte[] d, int o, String type, int v) {
+        switch (type) {
+            case "u8": d[o] = (byte) (v & 0xFF); break;
+            case "u16": d[o] = (byte) (v & 0xFF); d[o + 1] = (byte) ((v >> 8) & 0xFF); break;
+            default: d[o] = (byte) (v & 0xFF); d[o + 1] = (byte) ((v >> 8) & 0xFF);
+                d[o + 2] = (byte) ((v >> 16) & 0xFF); d[o + 3] = (byte) ((v >> 24) & 0xFF);
+        }
+    }
+
+    /** 各尾段字段（名称/类型/偏移），与枭雄 origin.py 一致。 */
+    private static String[][] tailSchema(String kind) {
+        switch (kind) {
+            case "weather": return new String[][]{
+                    {"天气类型", "u32", "0x0"}, {"未知", "u32", "0x4"},
+                    {"触发回合", "u32", "0x8"}, {"持续回合", "u32", "0xC"}};
+            case "reinforce": return new String[][]{
+                    {"坐标", "u16", "0x0"}, {"爆兵事件", "u16", "0x2"}, {"兵种", "u16", "0x4"},
+                    {"raw", "u16", "0x6"}, {"等级", "u16", "0x8"}, {"目标", "u16", "0xA"},
+                    {"编制", "u16", "0xC"}, {"死亡事件", "u16", "0xE"}, {"行为", "u16", "0x10"},
+                    {"血量比率", "u16", "0x12"}, {"朝向", "u16", "0x14"}, {"当前血量%", "u16", "0x16"},
+                    {"状态1", "u16", "0x18"}, {"状态2", "u16", "0x1A"}, {"将领", "u32", "0x1C"},
+                    {"军衔", "u32", "0x20"}, {"HP等级", "u32", "0x24"}, {"技能一", "u32", "0x28"},
+                    {"技能二", "u32", "0x2C"}, {"技能三", "u32", "0x30"}, {"技能四", "u32", "0x34"},
+                    {"技能五", "u32", "0x38"}, {"胸章一", "u32", "0x3C"}, {"胸章二", "u32", "0x40"},
+                    {"胸章三", "u32", "0x44"}, {"所属军团", "u32", "0x48"}, {"出现回合", "u32", "0x4C"}};
+            case "airstrike": return new String[][]{
+                    {"坐标", "u32", "0x0"}, {"兵种", "u16", "0x4"}, {"兵种等级", "u16", "0x6"},
+                    {"弹药", "u32", "0x8"}, {"军团", "u32", "0xC"}, {"回合", "u32", "0x10"}};
+            case "placementA":
+            case "placementB": return new String[][]{
+                    {"坐标", "u32", "0x0"}, {"方向", "u8", "0x4"}, {"序号2", "u16", "0x5"},
+                    {"运输船", "u8", "0x7"}};
+            case "strategy": return new String[][]{
+                    {"军团序号", "u32", "0x0"}, {"未知", "u32", "0x4"}, {"未知", "u32", "0x8"},
+                    {"建设代码", "u32", "0xC"}};
+            case "airSupport": return new String[][]{
+                    {"空军序号", "u32", "0x0"}, {"弹药类型", "u32", "0x4"}, {"所属军团", "u32", "0x8"}};
+            case "capital": return new String[][]{{"地块坐标", "u32", "0x0"}};
+        }
+        return new String[][]{};
+    }
+
+    // ===== 显示设置（仿枭雄 editor.json 分层开关） =====
+    private void showDisplaySettingsDialog() {
+        if (hexMapView == null) return;
+        final int density = (int) getResources().getDisplayMetrics().density;
+        final boolean[] cur = {
+                hexMapView.isShowTerrainArt(), hexMapView.isShowBuildings(),
+                hexMapView.isShowArmies(), hexMapView.isShowFlags(),
+                hexMapView.isShowGenerals(), hexMapView.isShowFacilities(),
+                hexMapView.isShowLabels(),
+        };
+        String[] names = {"地形贴图", "建筑", "兵种", "国旗", "将领", "设施", "省区编号"};
+        LinearLayout l = new LinearLayout(this);
+        l.setOrientation(LinearLayout.VERTICAL);
+        l.setPadding(28, 12, 28, 12);
+        for (int i = 0; i < names.length; i++) {
+            final int idx = i;
+            android.widget.CheckBox cb = new android.widget.CheckBox(this);
+            cb.setText(names[i]);
+            cb.setTextSize(14);
+            cb.setTextColor(0xFFe2e8f0);
+            cb.setChecked(cur[i]);
+            l.addView(cb);
+        }
+        android.widget.ScrollView sv = new android.widget.ScrollView(this);
+        sv.addView(l);
+        AlertDialog.Builder b = new AlertDialog.Builder(this, R.style.DarkDialog);
+        b.setTitle("显示设置");
+        b.setView(sv);
+        b.setNegativeButton("取消", null);
+        b.setPositiveButton("应用", (d, w) -> {
+            for (int i = 0; i < l.getChildCount(); i++) {
+                boolean v = ((android.widget.CheckBox) l.getChildAt(i)).isChecked();
+                switch (i) {
+                    case 0: hexMapView.setShowTerrainArt(v); break;
+                    case 1: hexMapView.setShowBuildings(v); break;
+                    case 2: hexMapView.setShowArmies(v); break;
+                    case 3: hexMapView.setShowFlags(v); break;
+                    case 4: hexMapView.setShowGenerals(v); break;
+                    case 5: hexMapView.setShowFacilities(v); break;
+                    case 6: hexMapView.setShowLabels(v); break;
+                }
+            }
+        });
+        b.show();
+    }
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         // 全局崩溃捕获，显示错误信息不闪退
@@ -400,6 +766,10 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         }
         try {
             GeneralData.load(readAssetBytes("json/GeneralSettings.json"));
+        } catch (Exception ignored) {
+        }
+        try {
+            GeneralData.loadSkills(readAssetBytes("json/SkillSettings.json"));
         } catch (Exception ignored) {
         }
         getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN);
@@ -1726,11 +2096,12 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         java.util.List<Runnable> acts = new java.util.ArrayList<>();
         acts.add(() -> showBtlDataOverlay());
         acts.add(() -> openDataPanel());
+        acts.add(() -> showTailSectionsDialog());
         acts.add(() -> {
             if (rightPanel == null) return;
             rightPanel.setVisibility(panelVisible ? View.GONE : View.VISIBLE);
         });
-        showDropdownMenu(anchor, new String[]{"btl数据", "数据面板",
+        showDropdownMenu(anchor, new String[]{"btl数据", "数据面板", "数据段列表…",
                 (panelVisible ? "隐藏属性面板" : "显示属性面板")}, acts);
     }
 
@@ -1740,13 +2111,19 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
             return;
         }
         java.util.List<Runnable> acts = new java.util.ArrayList<>();
+        acts.add(() -> validateAndFixDialog());
         acts.add(() -> showExpandDirectionDialog());
         acts.add(() -> startCropSelect());
         acts.add(() -> randomizeTerrainDialog());
         acts.add(() -> randomizeArmiesDialog());
         acts.add(() -> showBuildingListOverlay());
-        showDropdownMenu(anchor, new String[]{"扩展地图…", "截取地图…", "随机地形…",
-                "随机兵力…", "城市列表…"}, acts);
+        acts.add(() -> toggleManualMulti());
+        acts.add(() -> randomizeSelectedTerrain());
+        acts.add(() -> clearMultiSelection());
+        showDropdownMenu(anchor, new String[]{"校验并修复…", "扩展地图…", "截取地图…", "随机地形…",
+                "随机兵力…", "城市列表…",
+                (manualMulti ? "✔ 多选模式" : "多选模式"),
+                "随机所选地形…", "清除多选"}, acts);
     }
 
     private void showViewPopup(View anchor) {
@@ -1755,6 +2132,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         java.util.List<Runnable> acts = new java.util.ArrayList<>();
         acts.add(() -> showLegionsOverlay());
         acts.add(() -> toggleProvinceView());
+        acts.add(() -> showDisplaySettingsDialog());
         acts.add(() -> rightPanel.setVisibility(panelVisible ? View.GONE : View.VISIBLE));
         acts.add(() -> importOverlay());
         acts.add(() -> importGuideImage());
@@ -1762,6 +2140,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         showDropdownMenu(anchor, new String[]{
                 "军团列表",
                 (provinceViewOn ? "✔ 省规划视图" : "省规划视图"),
+                "显示设置…",
                 (panelVisible ? "隐藏工具面板" : "显示工具面板"),
                 "导入底图",
                 "导入图填",
@@ -4132,6 +4511,18 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
             if (armyFormationSp != null) {
                 writeArmyField(raw, 0x4, "u8", armyFormationSp.getSelectedItemPosition() + 1);
             }
+            if (armyAiSp != null) {
+                writeArmyField(raw, 0x1D, "u8", Integer.parseInt(armyAiSp.getSelectedItem().toString().split(" ")[0]));
+            }
+            if (armyMoraleSp != null) {
+                writeArmyField(raw, 0x28, "u8", Integer.parseInt(armyMoraleSp.getSelectedItem().toString().split(" ")[0]));
+            }
+            if (armyBadgeSp != null) {
+                writeArmyField(raw, 0x2B, "u8", Integer.parseInt(armyBadgeSp.getSelectedItem().toString().split(" ")[0]));
+            }
+            if (armyTransportSp != null) {
+                writeArmyField(raw, 0x1E, "u8", Integer.parseInt(armyTransportSp.getSelectedItem().toString().split(" ")[0]));
+            }
             if (armyTypePickerValue > 0) {
                 writeArmyField(raw, 0x2, "u8", armyTypePickerValue);
             }
@@ -4207,6 +4598,28 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
                 armyFormationSp = makeSpinner(new String[]{"1", "2", "3", "4"},
                         Math.max(0, Math.min(3, readArmyField(army.raw, off, ftype) - 1)));
                 row.addView(armyFormationSp);
+            } else if ("AI行动模式".equals(fname)) {
+                armyAiSp = makeSpinner(new String[]{"0 自由行动", "1 稳步推进", "2 激烈进攻",
+                        "3 坚守不动", "4 远离敌人"},
+                        Math.max(0, Math.min(4, readArmyField(army.raw, off, ftype))));
+                row.addView(armyAiSp);
+            } else if ("士气".equals(fname)) {
+                int cur = readArmyField(army.raw, off, ftype);
+                String[] opts = {"1 士气上升", "255 士气下降", "254 士气双降", "253 混乱"};
+                int idx = 0;
+                for (int o = 0; o < opts.length; o++) {
+                    if (Integer.parseInt(opts[o].split(" ")[0]) == cur) idx = o;
+                }
+                armyMoraleSp = makeSpinner(opts, idx);
+                row.addView(armyMoraleSp);
+            } else if ("等级标志显示".equals(fname)) {
+                armyBadgeSp = makeSpinner(new String[]{"0 无", "9 护盾"},
+                        readArmyField(army.raw, off, ftype) == 9 ? 1 : 0);
+                row.addView(armyBadgeSp);
+            } else if ("运输船".equals(fname)) {
+                armyTransportSp = makeSpinner(new String[]{"0 自由行动", "1 无法上岸", "2 无法下海"},
+                        Math.max(0, Math.min(2, readArmyField(army.raw, off, ftype))));
+                row.addView(armyTransportSp);
             } else {
                 EditText et = new EditText(this);
                 et.setInputType(InputType.TYPE_CLASS_NUMBER);
@@ -4219,7 +4632,44 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
                 row.addView(et);
                 if ("将领".equals(fname) && army.general > 0) {
                     TextView gname = new TextView(this);
-                    gname.setText("名字：" + GeneralData.name(army.general));
+                    GeneralData gd = GeneralData.BY_ID.get(army.general);
+                    StringBuilder sb = new StringBuilder("名字：" + GeneralData.name(army.general));
+                    if (gd != null) {
+                        if (gd.skills.length > 0) {
+                            java.util.List<String> sn = new java.util.ArrayList<>();
+                            for (int sk : gd.skills) {
+                                String n = GeneralData.SKILL_NAMES.get(sk);
+                                sn.add(n != null ? n : ("技能" + sk));
+                            }
+                            sb.append("\n技能：").append(String.join("、", sn));
+                        }
+                        if (gd.medals != null) {
+                            boolean any = false;
+                            StringBuilder ms = new StringBuilder("\n将领勋章：");
+                            String[] tags = {"胸章一", "胸章二", "胸章三", "勋带一", "勋带二", "勋带三"};
+                            for (int m = 0; m < gd.medals.length && m < 6; m++) {
+                                if (gd.medals[m] > 0) {
+                                    ms.append(tags[m]).append("=").append(gd.medals[m]).append(" ");
+                                    any = true;
+                                }
+                            }
+                            if (any) sb.append(ms);
+                        }
+                    }
+                    if (army.raw != null && army.raw.length > 0x35) {
+                        StringBuilder ms = new StringBuilder("\n单位勋章/勋带：");
+                        String[] tags = {"勋章一", "勋章二", "勋章三", "勋带一", "勋带二", "勋带三"};
+                        boolean any = false;
+                        for (int m = 0; m < 6; m++) {
+                            int v = army.raw[0x30 + m] & 0xFF;
+                            if (v > 0) {
+                                ms.append(tags[m]).append("=").append(v).append(" ");
+                                any = true;
+                            }
+                        }
+                        if (any) sb.append(ms);
+                    }
+                    gname.setText(sb.toString());
                     gname.setTextSize(10);
                     gname.setTextColor(0xFF9ca3af);
                     row.addView(gname);
@@ -4710,6 +5160,8 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
     }
 
     private static int readArmyField(byte[] raw, int off, String type) {
+        int need = type.equals("u8") ? 1 : type.equals("u16") ? 2 : 4;
+        if (raw == null || off < 0 || off + need > raw.length) return 0;
         java.nio.ByteBuffer bb = java.nio.ByteBuffer.wrap(raw).order(java.nio.ByteOrder.LITTLE_ENDIAN);
         switch (type) {
             case "u8": return raw[off] & 0xFF;
@@ -4719,6 +5171,8 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
     }
 
     private static void writeArmyField(byte[] raw, int off, String type, int v) {
+        int need = type.equals("u8") ? 1 : type.equals("u16") ? 2 : 4;
+        if (raw == null || off < 0 || off + need > raw.length) return;
         switch (type) {
             case "u8": raw[off] = (byte) (v & 0xFF); break;
             case "u16": raw[off] = (byte) (v & 0xFF); raw[off + 1] = (byte) ((v >> 8) & 0xFF); break;
@@ -4777,6 +5231,13 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
 
     @Override public void onTileSelected(int x, int y, TerrainTile tile) {
         playSelectSfx();
+        if (manualMulti && mapData != null) {
+            int idx = y * mapData.width + x;
+            mapData.toggleBlockSelection(idx);
+            hexMapView.refresh();
+            updateInfo();
+            return;
+        }
         if (addingArmy && pendingArmyType != null && mapData != null) {
             try {
                 byte[] raw = buildNewArmyRaw(x, y, pendingArmyType);

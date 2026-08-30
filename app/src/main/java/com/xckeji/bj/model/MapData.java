@@ -48,6 +48,9 @@ public class MapData {
     public java.util.List<Building> buildings = new java.util.ArrayList<>();
     /** 地雷/陷阱记录列表（陷阱段 12 字节/条：坐标/军团/等级/血量）。 */
     public java.util.List<Trap> traps = new java.util.ArrayList<>();
+    // 尾段数据（天气/援军/空袭/放置/战略/空中支援/首都）起始偏移，编辑时直接改 btlOriginalData
+    public int planStart, weatherStart, eventStart, reinforceStart, airstrikeStart;
+    public int placementAStart, placementBStart, strategyStart, airSupportStart, capitalStart;
     /** 新放置建筑的 32 字节草稿记录（地块索引 → raw），保存地图时按此写入，编辑字段不丢失。 */
     public java.util.Map<Integer, byte[]> newBuildingRaws = new java.util.HashMap<>();
     /** 省区操作撤销栈（每次省区绘制/新建前快照 provinces 数组）。 */
