@@ -380,6 +380,323 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
     }
 
     // ================= BTL 地图库（首页左侧） =================
+    // ===== 将领选择器（带搜索，仿枭雄） =====
+    private final java.util.Map<Integer, Bitmap> generalThumbCache = new java.util.HashMap<>();
+
+    /** 将领信息文本：名字 + 技能 + 将领勋章 + 单位已装备勋章/勋带。 */
+    private String generalInfoText(int generalId, byte[] raw) {
+        if (generalId <= 0) return "名字：未选择将领（点下面按钮可搜索选择）";
+        StringBuilder sb = new StringBuilder("名字：" + GeneralData.name(generalId));
+        GeneralData gd = GeneralData.BY_ID.get(generalId);
+        if (gd != null) {
+            if (gd.skills.length > 0) {
+                java.util.List<String> sn = new java.util.ArrayList<>();
+                for (int sk : gd.skills) {
+                    String n = GeneralData.SKILL_NAMES.get(sk);
+                    sn.add(n != null ? n : ("技能" + sk));
+                }
+                sb.append("\n技能：").append(String.join("、", sn));
+            }
+            if (gd.medals != null) {
+                StringBuilder ms = new StringBuilder("\n将领勋章：");
+                boolean any = false;
+                String[] tags = {"胸章一", "胸章二", "胸章三", "勋带一", "勋带二", "勋带三"};
+                for (int m = 0; m < gd.medals.length && m < 6; m++) {
+                    if (gd.medals[m] > 0) {
+                        ms.append(tags[m]).append("=").append(gd.medals[m]).append(" ");
+                        any = true;
+                    }
+                }
+                if (any) sb.append(ms);
+            }
+        }
+        if (raw != null && raw.length > 0x35) {
+            StringBuilder ms = new StringBuilder("\n单位勋章/勋带：");
+            boolean any = false;
+            String[] tags = {"勋章一", "勋章二", "勋章三", "勋带一", "勋带二", "勋带三"};
+            for (int m = 0; m < 6; m++) {
+                int v = raw[0x30 + m] & 0xFF;
+                if (v > 0) {
+                    ms.append(tags[m]).append("=").append(v).append(" ");
+                    any = true;
+                }
+            }
+            if (any) sb.append(ms);
+        }
+        return sb.toString();
+    }
+
+    private Bitmap generalThumb(int id) {
+        Bitmap b = generalThumbCache.get(id);
+        if (b == null) {
+            b = loadBmp("general/" + id + ".png");
+            if (b != null) generalThumbCache.put(id, b);
+        }
+        return b;
+    }
+
+    private class GeneralAdapter extends android.widget.BaseAdapter {
+        private final java.util.List<GeneralData> items;
+
+        GeneralAdapter(java.util.List<GeneralData> items) { this.items = items; }
+
+        @Override public int getCount() { return items.size(); }
+        @Override public Object getItem(int i) { return items.get(i); }
+        @Override public long getItemId(int i) { return items.get(i).id; }
+
+        @Override public View getView(int pos, View convert, android.view.ViewGroup parent) {
+            final int density = (int) getResources().getDisplayMetrics().density;
+            LinearLayout row = new LinearLayout(MainActivity.this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(6, 6, 6, 6);
+            GeneralData g = items.get(pos);
+            ImageView iv = new ImageView(MainActivity.this);
+            Bitmap bm = generalThumb(g.id);
+            if (bm != null) iv.setImageBitmap(bm);
+            iv.setLayoutParams(new LinearLayout.LayoutParams(
+                    46 * density, 46 * density));
+            row.addView(iv);
+            LinearLayout info = new LinearLayout(MainActivity.this);
+            info.setOrientation(LinearLayout.VERTICAL);
+            info.setPadding(10, 0, 0, 0);
+            TextView nm = new TextView(MainActivity.this);
+            nm.setText(g.name.isEmpty() ? ("将领" + g.id) : g.name);
+            nm.setTextSize(14);
+            nm.setTextColor(0xFFe5e7eb);
+            info.addView(nm);
+            TextView sub = new TextView(MainActivity.this);
+            sub.setText("ID " + g.id + (g.ename.isEmpty() ? "" : " · " + g.ename));
+            sub.setTextSize(11);
+            sub.setTextColor(0xFF94a3b8);
+            info.addView(sub);
+            row.addView(info);
+            return row;
+        }
+    }
+
+    /** 将领选择悬浮窗：搜索 + 列表点选（0 = 无将领）。 */
+    private void showGeneralPicker(final java.util.function.IntConsumer onPick) {
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(16, 10, 16, 10);
+        final EditText search = new EditText(this);
+        search.setHint("搜索将领名 / 英文名 / ID");
+        styleDialogEdit(search);
+        final android.widget.ListView lv = new android.widget.ListView(this);
+        final java.util.List<GeneralData> shown = new java.util.ArrayList<>(GeneralData.ALL);
+        final GeneralAdapter adapter = new GeneralAdapter(shown);
+        lv.setAdapter(adapter);
+        search.addTextChangedListener(new android.text.TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
+            @Override public void onTextChanged(CharSequence s, int a, int b, int c) { }
+            @Override public void afterTextChanged(android.text.Editable e) {
+                String q = e.toString().trim().toLowerCase();
+                shown.clear();
+                for (GeneralData g : GeneralData.ALL) {
+                    if (q.isEmpty() || g.name.toLowerCase().contains(q)
+                            || g.ename.toLowerCase().contains(q)
+                            || String.valueOf(g.id).contains(q)) {
+                        shown.add(g);
+                    }
+                }
+                adapter.notifyDataSetChanged();
+            }
+        });
+        root.addView(search);
+        root.addView(lv, new LinearLayout.LayoutParams(-1, 0, 1f));
+        AlertDialog.Builder b = new AlertDialog.Builder(this, R.style.DarkDialog);
+        b.setTitle("选择将领（" + GeneralData.ALL.size() + " 位）");
+        b.setView(root);
+        b.setNeutralButton("清除（无将领）", (d, w) -> onPick.accept(0));
+        b.setNegativeButton("取消", null);
+        final AlertDialog dlg = b.create();
+        dlg.show();
+        lv.setOnItemClickListener((p, v, pos, id) -> {
+            onPick.accept(shown.get(pos).id);
+            dlg.dismiss();
+        });
+    }
+
+    // ===== 兵种选择窗（带搜索，仿枭雄） =====
+    private void showArmyPicker(final java.util.function.IntConsumer onPick) {
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(16, 10, 16, 10);
+        final EditText search = new EditText(this);
+        search.setHint("搜索兵种名 / 代码");
+        styleDialogEdit(search);
+        final android.widget.ListView lv = new android.widget.ListView(this);
+        final java.util.List<ArmyConfig> all = new java.util.ArrayList<>();
+        java.util.LinkedHashMap<Integer, ArmyConfig> uniq = new java.util.LinkedHashMap<>();
+        if (ArmyConfig.ALL != null) {
+            for (ArmyConfig c : ArmyConfig.ALL) {
+                if (c != null && c.army >= 1 && (c.army <= 40 || c.elite > 0)
+                        && !uniq.containsKey(c.army)) uniq.put(c.army, c);
+            }
+        }
+        all.addAll(uniq.values());
+        final java.util.List<ArmyConfig> shown = new java.util.ArrayList<>(all);
+        final android.widget.BaseAdapter adapter = new android.widget.BaseAdapter() {
+            @Override public int getCount() { return shown.size(); }
+            @Override public Object getItem(int i) { return shown.get(i); }
+            @Override public long getItemId(int i) { return shown.get(i).army; }
+            @Override public View getView(int pos, View convert, android.view.ViewGroup parent) {
+                final int density = (int) getResources().getDisplayMetrics().density;
+                LinearLayout row = new LinearLayout(MainActivity.this);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                row.setGravity(Gravity.CENTER_VERTICAL);
+                row.setPadding(6, 6, 6, 6);
+                ArmyConfig c = shown.get(pos);
+                ImageView iv = new ImageView(MainActivity.this);
+                Bitmap bm = loadArmyIcon(c.army);
+                if (bm != null) iv.setImageBitmap(bm);
+                iv.setLayoutParams(new LinearLayout.LayoutParams(46 * density, 46 * density));
+                row.addView(iv);
+                LinearLayout info = new LinearLayout(MainActivity.this);
+                info.setOrientation(LinearLayout.VERTICAL);
+                info.setPadding(10, 0, 0, 0);
+                TextView nm = new TextView(MainActivity.this);
+                nm.setText(c.name.isEmpty() ? ("兵种" + c.army) : c.name);
+                nm.setTextSize(14);
+                nm.setTextColor(0xFFe5e7eb);
+                info.addView(nm);
+                TextView sub = new TextView(MainActivity.this);
+                sub.setText("代码 " + c.army + (c.elite > 0 ? " · 精英" : ""));
+                sub.setTextSize(11);
+                sub.setTextColor(0xFF94a3b8);
+                info.addView(sub);
+                row.addView(info);
+                return row;
+            }
+        };
+        lv.setAdapter(adapter);
+        search.addTextChangedListener(new android.text.TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
+            @Override public void onTextChanged(CharSequence s, int a, int b, int c) { }
+            @Override public void afterTextChanged(android.text.Editable e) {
+                String q = e.toString().trim().toLowerCase();
+                shown.clear();
+                for (ArmyConfig c : all) {
+                    if (q.isEmpty() || c.name.toLowerCase().contains(q)
+                            || String.valueOf(c.army).contains(q)) {
+                        shown.add(c);
+                    }
+                }
+                adapter.notifyDataSetChanged();
+            }
+        });
+        root.addView(search);
+        root.addView(lv, new LinearLayout.LayoutParams(-1, 0, 1f));
+        AlertDialog.Builder b = new AlertDialog.Builder(this, R.style.DarkDialog);
+        b.setTitle("选择兵种（" + all.size() + " 个）");
+        b.setView(root);
+        b.setNegativeButton("取消", null);
+        final AlertDialog dlg = b.create();
+        dlg.show();
+        lv.setOnItemClickListener((p, v, pos, id) -> {
+            onPick.accept(shown.get(pos).army);
+            dlg.dismiss();
+        });
+    }
+
+    // ===== 建筑图标选择（类型/外观/首都，仿枭雄映射） =====
+    private static final String[] BUILDING_ICON_NAMES = {
+            "building_1", "building_2", "building_3", "building_11", "building_12",
+            "building_13", "building_14", "building_15", "building_15b", "building_15f",
+            "building_21", "building_22", "building_23",
+            "building_31_1", "building_31_2", "building_31_3", "building_31_4",
+            "capital_01", "capital_04", "capital_05", "capital_07", "capital_08",
+            "capital_09", "capital_10", "capital_11", "capital_12", "capital_15",
+            "capital_16", "capital_18", "capital_19", "capital_20", "capital_21",
+            "capital_22", "capital_24", "capital_26", "capital_27", "capital_28",
+            "capital_29", "tunnel_gate1", "tunnel_gate2",
+    };
+
+    private void showBuildingIconPicker(final MapData.Building b) {
+        final int density = (int) getResources().getDisplayMetrics().density;
+        LinearLayout grid = new LinearLayout(this);
+        grid.setOrientation(LinearLayout.VERTICAL);
+        grid.setPadding(12, 10, 12, 10);
+        LinearLayout row = null;
+        int col = 0;
+        for (final String name : BUILDING_ICON_NAMES) {
+            if (col % 3 == 0) {
+                row = new LinearLayout(this);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                grid.addView(row);
+            }
+            col++;
+            LinearLayout cell = new LinearLayout(this);
+            cell.setOrientation(LinearLayout.VERTICAL);
+            cell.setGravity(Gravity.CENTER);
+            cell.setPadding(6, 6, 6, 6);
+            ImageView iv = new ImageView(this);
+            Bitmap bm = loadBmp("building/" + name + ".png");
+            if (bm != null) iv.setImageBitmap(bm);
+            iv.setLayoutParams(new LinearLayout.LayoutParams(64 * density, 52 * density));
+            iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            cell.addView(iv);
+            TextView lb = new TextView(this);
+            lb.setText(name.replace("building_", "建筑").replace("capital_", "首都")
+                    .replace("tunnel_gate", "隧道"));
+            lb.setTextSize(10);
+            lb.setTextColor(0xFFcbd5e1);
+            cell.addView(lb);
+            cell.setClickable(true);
+            cell.setOnClickListener(v -> applyBuildingIcon(b, name));
+            if (row != null) row.addView(cell, new LinearLayout.LayoutParams(0, -2, 1f));
+        }
+        android.widget.ScrollView sv = new android.widget.ScrollView(this);
+        sv.addView(grid);
+        AlertDialog.Builder bd = new AlertDialog.Builder(this, R.style.DarkDialog);
+        bd.setTitle("选择建筑图标（当前 类型" + (b.raw[4] & 0xFF) + " 外观" + (b.raw[5] & 0xFF) + "）");
+        bd.setView(sv);
+        bd.setNegativeButton("取消", null);
+        bd.show();
+    }
+
+    /** 按选择的图标写回建筑类型/外观（>=100 视为首都，31-34 用外观选变体）。 */
+    private void applyBuildingIcon(MapData.Building b, String name) {
+        try {
+            int type, appearance = 0;
+            if (name.startsWith("capital_")) {
+                type = 100 + Integer.parseInt(name.substring("capital_".length()));
+            } else if (name.startsWith("building_31_")) {
+                type = 31;
+                appearance = Integer.parseInt(name.substring("building_31_".length()));
+            } else if (name.startsWith("tunnel_gate")) {
+                type = b.raw[4] & 0xFF; // 隧道口不改类型，仅提示
+                Toast.makeText(this, "隧道口图标由游戏按隧道两端自动绘制", Toast.LENGTH_LONG).show();
+                return;
+            } else {
+                String num = name.substring("building_".length());
+                StringBuilder digits = new StringBuilder();
+                for (char ch : num.toCharArray()) {
+                    if (Character.isDigit(ch)) digits.append(ch);
+                    else break;
+                }
+                type = Integer.parseInt(digits.toString());
+            }
+            byte[] raw = b.raw.clone();
+            raw[4] = (byte) (type & 0xFF);
+            raw[5] = (byte) (appearance & 0xFF);
+            FileParser.BtlHeaderInfo h = FileParser.parseBTLHeader(mapData.btlOriginalData);
+            FileParser.patchTailRecord(mapData, h.buildingStart, b.index, 32, raw);
+            b.raw = raw;
+            b.type = type;
+            if (mapData.buildingIds != null) {
+                mapData.setBuildingId(b.x, b.y, type);
+            }
+            hexMapView.refresh();
+            rebuildCityEditor();
+            updateInfo();
+            Toast.makeText(this, "已设为 " + name, Toast.LENGTH_SHORT).show();
+        } catch (Exception e) {
+            Toast.makeText(this, "设置失败: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
     private FrameLayout mapLibOverlay;
     private LinearLayout onlineListBox, localListBox;
     private TextView mapLibStatus;
@@ -5167,6 +5484,20 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
                 pickHint.setTextSize(10);
                 pickHint.setTextColor(0xFF9ca3af);
                 row.addView(pickHint);
+                Button pickA = new Button(this);
+                pickA.setText("🔍 搜索选择兵种");
+                pickA.setTextSize(11);
+                pickA.setTextColor(Color.WHITE);
+                pickA.setBackgroundColor(Color.parseColor("#7c3aed"));
+                pickA.setLayoutParams(new LinearLayout.LayoutParams(-1, 40 * density));
+                pickA.setOnClickListener(v -> showArmyPicker(id -> {
+                    armyTypePickerValue = id;
+                    refreshArmyPickerHighlight(iconRow);
+                    ArmyConfig c = ArmyConfig.byArmy(id);
+                    pickHint.setText("已选：" + (c != null ? c.name : ("代码" + id))
+                            + "（代码" + id + "），保存后生效");
+                }));
+                row.addView(pickA);
             } else if ("编制".equals(fname)) {
                 armyFormationSp = makeSpinner(new String[]{"1", "2", "3", "4"},
                         Math.max(0, Math.min(3, readArmyField(army.raw, off, ftype) - 1)));
@@ -5203,49 +5534,23 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
                 et.setPadding(6 * density, 4 * density, 6 * density, 4 * density);
                 armyEds[i] = et;
                 row.addView(et);
-                if ("将领".equals(fname) && army.general > 0) {
-                    TextView gname = new TextView(this);
-                    GeneralData gd = GeneralData.BY_ID.get(army.general);
-                    StringBuilder sb = new StringBuilder("名字：" + GeneralData.name(army.general));
-                    if (gd != null) {
-                        if (gd.skills.length > 0) {
-                            java.util.List<String> sn = new java.util.ArrayList<>();
-                            for (int sk : gd.skills) {
-                                String n = GeneralData.SKILL_NAMES.get(sk);
-                                sn.add(n != null ? n : ("技能" + sk));
-                            }
-                            sb.append("\n技能：").append(String.join("、", sn));
-                        }
-                        if (gd.medals != null) {
-                            boolean any = false;
-                            StringBuilder ms = new StringBuilder("\n将领勋章：");
-                            String[] tags = {"胸章一", "胸章二", "胸章三", "勋带一", "勋带二", "勋带三"};
-                            for (int m = 0; m < gd.medals.length && m < 6; m++) {
-                                if (gd.medals[m] > 0) {
-                                    ms.append(tags[m]).append("=").append(gd.medals[m]).append(" ");
-                                    any = true;
-                                }
-                            }
-                            if (any) sb.append(ms);
-                        }
-                    }
-                    if (army.raw != null && army.raw.length > 0x35) {
-                        StringBuilder ms = new StringBuilder("\n单位勋章/勋带：");
-                        String[] tags = {"勋章一", "勋章二", "勋章三", "勋带一", "勋带二", "勋带三"};
-                        boolean any = false;
-                        for (int m = 0; m < 6; m++) {
-                            int v = army.raw[0x30 + m] & 0xFF;
-                            if (v > 0) {
-                                ms.append(tags[m]).append("=").append(v).append(" ");
-                                any = true;
-                            }
-                        }
-                        if (any) sb.append(ms);
-                    }
-                    gname.setText(sb.toString());
+                if ("将领".equals(fname)) {
+                    final TextView gname = new TextView(this);
+                    gname.setText(generalInfoText(army.general, army.raw));
                     gname.setTextSize(10);
                     gname.setTextColor(0xFF9ca3af);
                     row.addView(gname);
+                    Button pickG = new Button(this);
+                    pickG.setText("🔍 搜索选择将领");
+                    pickG.setTextSize(11);
+                    pickG.setTextColor(Color.WHITE);
+                    pickG.setBackgroundColor(Color.parseColor("#7c3aed"));
+                    pickG.setLayoutParams(new LinearLayout.LayoutParams(-1, 40 * density));
+                    pickG.setOnClickListener(v -> showGeneralPicker(id -> {
+                        et.setText(String.valueOf(id));
+                        gname.setText(generalInfoText(id, army.raw));
+                    }));
+                    row.addView(pickG);
                 }
             }
             armyEditorArea.addView(row);
@@ -5405,6 +5710,35 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         head.setTypeface(null, android.graphics.Typeface.BOLD);
         head.setPadding(8, 6, 8, 6);
         cityScroll.addView(head);
+
+        // 建筑图标（类型/外观/首都）可视化选择，仿枭雄建筑图集映射
+        final int iconDensity = (int) getResources().getDisplayMetrics().density;
+        LinearLayout iconRowBox = new LinearLayout(this);
+        iconRowBox.setOrientation(LinearLayout.HORIZONTAL);
+        iconRowBox.setGravity(Gravity.CENTER_VERTICAL);
+        iconRowBox.setPadding(8, 4, 8, 4);
+        final ImageView iconPreview = new ImageView(this);
+        iconPreview.setLayoutParams(new LinearLayout.LayoutParams(64 * iconDensity, 52 * iconDensity));
+        iconPreview.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        Bitmap curIcon = loadBmp("building/"
+                + HexMapView.buildingImageName(b.raw[4] & 0xFF, b.raw[5] & 0xFF) + ".png");
+        if (curIcon != null) iconPreview.setImageBitmap(curIcon);
+        iconRowBox.addView(iconPreview);
+        TextView iconLabel = new TextView(this);
+        iconLabel.setText("类型 " + (b.raw[4] & 0xFF) + " · 外观 " + (b.raw[5] & 0xFF)
+                + "\n（含首都图标）");
+        iconLabel.setTextSize(11);
+        iconLabel.setTextColor(0xFF9ca3af);
+        iconLabel.setPadding(10, 0, 0, 0);
+        iconRowBox.addView(iconLabel, new LinearLayout.LayoutParams(0, -2, 1f));
+        Button pickIcon = new Button(this);
+        pickIcon.setText("选择图标");
+        pickIcon.setTextSize(11);
+        pickIcon.setTextColor(Color.WHITE);
+        pickIcon.setBackgroundColor(Color.parseColor("#7c3aed"));
+        pickIcon.setOnClickListener(v -> showBuildingIconPicker(b));
+        iconRowBox.addView(pickIcon);
+        cityScroll.addView(iconRowBox);
 
         // 国家/军团归属：给这个城市设置或更改所属军团（0xFF=中立）
         addCityOwnershipRow(cityScroll, b, this::rebuildCityEditor);

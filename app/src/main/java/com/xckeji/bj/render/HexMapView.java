@@ -187,6 +187,7 @@ public class HexMapView extends View {
         clearCropRect();
         hexTileCache.clear(); cachedHexSize = -1f;
         fullMapDirty = true;
+        rebuildBuildingInfo();
         rebuildProvinceOwner();
         post(() -> { centerMap(); invalidate(); });
     }
@@ -197,8 +198,61 @@ public class HexMapView extends View {
     public int getSelectedY() { return selectedY; }
     public void refresh() {
         fullMapDirty = true;
+        rebuildBuildingInfo();
         rebuildProvinceOwner();
         invalidate();
+    }
+
+    // 建筑类型/外观按格缓存，供「类型+外观+首都」选图标用（仿枭雄）
+    private int[] bTypeByCell;
+    private int[] bAppearanceByCell;
+    private final Map<String, Bitmap> buildingByName = new HashMap<>();
+
+    private void rebuildBuildingInfo() {
+        if (mapData == null) { bTypeByCell = null; bAppearanceByCell = null; return; }
+        int n = mapData.getTotalTiles();
+        if (bTypeByCell == null || bTypeByCell.length != n) {
+            bTypeByCell = new int[n];
+            bAppearanceByCell = new int[n];
+        } else {
+            java.util.Arrays.fill(bTypeByCell, 0);
+            java.util.Arrays.fill(bAppearanceByCell, 0);
+        }
+        if (mapData.buildings != null) {
+            for (MapData.Building b : mapData.buildings) {
+                if (b == null || b.raw == null || b.raw.length < 6) continue;
+                int idx = b.y * mapData.width + b.x;
+                if (idx < 0 || idx >= n) continue;
+                bTypeByCell[idx] = b.raw[4] & 0xFF;
+                bAppearanceByCell[idx] = b.raw[5] & 0xFF;
+            }
+        }
+    }
+
+    /** 建筑图片名（规则与枭雄一致）：16-19→15；31-34→building_31_外观；>=100→capital_类型；其余→building_类型。 */
+    public static String buildingImageName(int type, int appearance) {
+        if (type <= 0) return null;
+        if (type >= 100) return "capital_" + (type - 100 < 10 ? "0" : "") + (type - 100);
+        if (type >= 16 && type <= 19) type = 15;
+        if (type >= 31 && type <= 34) return "building_31_" + (appearance < 1 ? 1 : appearance);
+        return "building_" + type;
+    }
+
+    /** 建筑图标：优先新图集 assets/building/，缺失时回退旧的 btl/building_N.png。 */
+    private Bitmap buildingIcon(int type, int appearance) {
+        String name = buildingImageName(type, appearance);
+        if (name == null) return null;
+        Bitmap b = buildingByName.get(name);
+        if (b == null) {
+            b = load("building/" + name + ".png");
+            if (b != null) buildingByName.put(name, b);
+        }
+        if (b == null && buildingBmps != null) {
+            int t = type >= 100 ? type - 100 : type;
+            if (t >= 16 && t <= 19) t = 15;
+            b = buildingBmps.get(t);
+        }
+        return b;
     }
 
     /**
@@ -465,16 +519,17 @@ public class HexMapView extends View {
                         }
                     }
                     int bid = mapData.getBuildingId(x, y);
-                    if (showBuildings && bid > 0 && buildingBmps != null) {
-                        Bitmap bb = buildingBmps.get(bid);
-                        if (bb != null) {
-                            c.save();
-                            c.clipPath(sharedPath);
-                            c.drawBitmap(bb, null,
-                                    new Rect((int) (px - s), (int) (py - s),
-                                            (int) (px + s), (int) (py + s)), tilePaint);
-                            c.restore();
-                        }
+                    Bitmap bb = (showBuildings && bid > 0)
+                            ? buildingIcon(bid, bAppearanceByCell != null && cellIdx < bAppearanceByCell.length
+                                    ? bAppearanceByCell[cellIdx] : 0)
+                            : null;
+                    if (bb != null) {
+                        c.save();
+                        c.clipPath(sharedPath);
+                        c.drawBitmap(bb, null,
+                                new Rect((int) (px - s), (int) (py - s),
+                                        (int) (px + s), (int) (py + s)), tilePaint);
+                        c.restore();
                     }
                     if (drawGrid) {
                         gridPaint.setStrokeWidth(Math.max(0.5f, 0.8f));
@@ -1214,17 +1269,18 @@ public class HexMapView extends View {
                 }
                 // 6. 建筑（铺满六角格，clipPath裁剪）
                 int bid = mapData.getBuildingId(x, y);
-                if (showBuildings && bid > 0 && buildingBmps != null) {
-                    Bitmap bb = buildingBmps.get(bid);
-                    if (bb != null) {
-                        canvas.save();
-                        canvas.clipPath(sharedPath);
-                        float sh = hs();
-                        canvas.drawBitmap(bb, null,
-                            new Rect((int)(px-sh), (int)(py-sh), (int)(px+sh), (int)(py+sh)),
-                            tilePaint);
-                        canvas.restore();
-                    }
+                Bitmap bb = (showBuildings && bid > 0)
+                        ? buildingIcon(bid, bAppearanceByCell != null && cellIdx < bAppearanceByCell.length
+                                ? bAppearanceByCell[cellIdx] : 0)
+                        : null;
+                if (bb != null) {
+                    canvas.save();
+                    canvas.clipPath(sharedPath);
+                    float sh = hs();
+                    canvas.drawBitmap(bb, null,
+                        new Rect((int)(px-sh), (int)(py-sh), (int)(px+sh), (int)(py+sh)),
+                        tilePaint);
+                    canvas.restore();
                 }
             }
         }
