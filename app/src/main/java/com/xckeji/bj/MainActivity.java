@@ -277,8 +277,55 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         {"海岸炮等级", "i32", "0xE4"}, {"火箭发射器等级", "i32", "0xE8"}, {"工事等级", "i32", "0xEC"},
         {"高射机枪等级", "i32", "0xF0"}, {"防空炮等级", "i32", "0xF4"}, {"对空导弹等级", "i32", "0xF8"},
         {"雷达等级", "i32", "0xFC"}, {"弹头", "i32", "0x100"}, {"固体火箭发动机等级", "i32", "0x104"},
-        {"破防等级", "i32", "0x108"}, {"核聚变等级", "i32", "0x10C"}, {"科技等级", "i32", "0x11C"}
+        {"破防等级", "i32", "0x108"}, {"核聚变等级", "i32", "0x10C"},
+        {"未知1", "i32", "0x110"}, {"未知2", "i32", "0x114"}, {"未知3", "i32", "0x118"},
+        {"国家AI行为", "i32", "0x11C"}, {"初始科技等级", "i32", "0x120"},
+        {"离子炮", "i32", "0x124"}, {"初始激光炮等级", "i32", "0x128"}
     };
+
+    /** 国家配置表列名（与熊编辑器 headers 一一对应，按偏移查）。 */
+    private static final java.util.Map<Integer, String> LEGION_NAMES = new java.util.HashMap<>();
+    static {
+        LEGION_NAMES.put(0x0, "行动顺序"); LEGION_NAMES.put(0x4, "国家ID");
+        LEGION_NAMES.put(0x8, "初始经济"); LEGION_NAMES.put(0xC, "初始工业");
+        LEGION_NAMES.put(0x10, "初始科技"); LEGION_NAMES.put(0x14, "玩家控制");
+        LEGION_NAMES.put(0x18, "阵营"); LEGION_NAMES.put(0x1C, "战败条件");
+        LEGION_NAMES.put(0x20, "国家血率"); LEGION_NAMES.put(0x24, "国家税率");
+        LEGION_NAMES.put(0x28, "国家颜色");
+        LEGION_NAMES.put(0x2C, "原子弹"); LEGION_NAMES.put(0x30, "氢弹");
+        LEGION_NAMES.put(0x34, "三相弹"); LEGION_NAMES.put(0x38, "反物质弹");
+        LEGION_NAMES.put(0x3C, "机动等级"); LEGION_NAMES.put(0x40, "步枪等级");
+        LEGION_NAMES.put(0x44, "迷彩等级"); LEGION_NAMES.put(0x48, "工兵等级");
+        LEGION_NAMES.put(0x4C, "手雷等级"); LEGION_NAMES.put(0x50, "迫击炮等级");
+        LEGION_NAMES.put(0x54, "行军等级"); LEGION_NAMES.put(0x58, "防弹衣等级");
+        LEGION_NAMES.put(0x5C, "装甲等级"); LEGION_NAMES.put(0x60, "主炮等级");
+        LEGION_NAMES.put(0x64, "车体等级"); LEGION_NAMES.put(0x68, "引擎等级");
+        LEGION_NAMES.put(0x6C, "机枪等级"); LEGION_NAMES.put(0x70, "突袭等级");
+        LEGION_NAMES.put(0x74, "车载防空等级"); LEGION_NAMES.put(0x78, "强化车体等级");
+        LEGION_NAMES.put(0x7C, "火炮等级"); LEGION_NAMES.put(0x80, "火箭弹等级");
+        LEGION_NAMES.put(0x84, "牵引等级"); LEGION_NAMES.put(0x88, "火炮装甲等级");
+        LEGION_NAMES.put(0x8C, "火力等级"); LEGION_NAMES.put(0x90, "火箭等级");
+        LEGION_NAMES.put(0x94, "伪装等级"); LEGION_NAMES.put(0x98, "舰体等级");
+        LEGION_NAMES.put(0x9C, "推进器等级"); LEGION_NAMES.put(0xA0, "装甲等级2");
+        LEGION_NAMES.put(0xA4, "武器等级"); LEGION_NAMES.put(0xA8, "舰炮等级");
+        LEGION_NAMES.put(0xAC, "鱼雷等级"); LEGION_NAMES.put(0xB0, "扫雷等级");
+        LEGION_NAMES.put(0xB4, "舰载防空等级"); LEGION_NAMES.put(0xB8, "现代舰体等级");
+        LEGION_NAMES.put(0xBC, "航空燃油等级"); LEGION_NAMES.put(0xC0, "航空发动机等级");
+        LEGION_NAMES.put(0xC4, "航空炸弹等级"); LEGION_NAMES.put(0xC8, "空袭等级");
+        LEGION_NAMES.put(0xCC, "轰炸等级"); LEGION_NAMES.put(0xD0, "战略轰炸等级");
+        LEGION_NAMES.put(0xD4, "空降等级"); LEGION_NAMES.put(0xD8, "喷气发动机等级");
+        LEGION_NAMES.put(0xDC, "机枪堡等级"); LEGION_NAMES.put(0xE0, "要塞炮等级");
+        LEGION_NAMES.put(0xE4, "海岸炮等级"); LEGION_NAMES.put(0xE8, "火箭发射器等级");
+        LEGION_NAMES.put(0xEC, "工事等级"); LEGION_NAMES.put(0xF0, "高射机枪等级");
+        LEGION_NAMES.put(0xF4, "防空炮等级"); LEGION_NAMES.put(0xF8, "对空导弹等级");
+        LEGION_NAMES.put(0xFC, "雷达等级"); LEGION_NAMES.put(0x100, "导弹弹头等级");
+        LEGION_NAMES.put(0x104, "固体火箭发动机等级"); LEGION_NAMES.put(0x108, "核弹破防等级");
+        LEGION_NAMES.put(0x10C, "核聚变等级");
+        LEGION_NAMES.put(0x110, "未知1"); LEGION_NAMES.put(0x114, "未知2");
+        LEGION_NAMES.put(0x118, "未知3");
+        LEGION_NAMES.put(0x11C, "国家AI行为"); LEGION_NAMES.put(0x120, "初始科技等级");
+        LEGION_NAMES.put(0x124, "离子炮"); LEGION_NAMES.put(0x128, "初始激光炮等级");
+    }
     private String customSavePath = "";
     private Map<Integer, Bitmap> terrainThumbs = new HashMap<>();
     private Map<Integer, Bitmap> buildingThumbs = new HashMap<>();
@@ -384,6 +431,389 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
 
     // ================= BTL 地图库（首页左侧） =================
     // ===== 将领选择器（带搜索，仿枭雄） =====
+    // ================= 国家配置表（对应熊编辑器的「国家配置」栏） =================
+    private int[][] nationValues;
+    private int nationSelRow = -1;
+    private String nationClipboard = null;
+    private LinearLayout nationHeaderBox, nationRowsBox;
+
+    private static int readLegionInt(byte[] raw, int off) {
+        if (raw == null || off < 0 || off + 4 > raw.length) return 0;
+        return (raw[off] & 0xFF) | ((raw[off + 1] & 0xFF) << 8)
+                | ((raw[off + 2] & 0xFF) << 16) | ((raw[off + 3] & 0xFF) << 24);
+    }
+
+    private static void writeLegionInt(byte[] raw, int off, int v) {
+        if (raw == null || off < 0 || off + 4 > raw.length) return;
+        raw[off] = (byte) (v & 0xFF);
+        raw[off + 1] = (byte) ((v >> 8) & 0xFF);
+        raw[off + 2] = (byte) ((v >> 16) & 0xFF);
+        raw[off + 3] = (byte) ((v >> 24) & 0xFF);
+    }
+
+    private static int legionColorOf(byte[] raw) {
+        if (raw == null || raw.length < 0x2C) return 0xFFFF00FF;
+        int r = raw[0x28] & 0xFF, g = raw[0x29] & 0xFF, b = raw[0x2A] & 0xFF;
+        return 0xFF000000 | (r << 16) | (g << 8) | b;
+    }
+
+    private static void setLegionColor(byte[] raw, int color) {
+        if (raw == null || raw.length < 0x2C) return;
+        raw[0x28] = (byte) ((color >> 16) & 0xFF);
+        raw[0x29] = (byte) ((color >> 8) & 0xFF);
+        raw[0x2A] = (byte) (color & 0xFF);
+        raw[0x2B] = (byte) 0xFF;
+    }
+
+    private void showNationConfigDialog() {
+        if (mapData == null || mapData.legions == null || mapData.legions.isEmpty()) {
+            Toast.makeText(this, "请先加载带军团的 BTL 文件", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        final int density = (int) getResources().getDisplayMetrics().density;
+        final int n = mapData.legions.size();
+        final int cols = LEGION_FIELDS.length;
+        nationValues = new int[n][cols];
+        for (int i = 0; i < n; i++) {
+            byte[] raw = mapData.legions.get(i).raw;
+            for (int c = 0; c < cols; c++) {
+                int off = Integer.decode(LEGION_FIELDS[c][2]);
+                nationValues[i][c] = (off == 0x28) ? legionColorOf(raw) : readLegionInt(raw, off);
+            }
+        }
+        if (nationSelRow < 0 || nationSelRow >= n) nationSelRow = 0;
+
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(10, 10, 10, 10);
+
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        String[] labels = {"复制配置", "粘贴配置", "应用到所有", "批量编辑", "保存"};
+        Runnable[] actions = {
+                () -> {
+                    nationClipboard = rowToString(nationSelRow);
+                    Toast.makeText(this, "已复制军团" + (nationSelRow + 1) + " 的配置", Toast.LENGTH_SHORT).show();
+                },
+                () -> {
+                    if (nationClipboard == null) {
+                        Toast.makeText(this, "请先复制配置", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    stringToRow(nationClipboard, nationSelRow);
+                    renderNationTable();
+                    Toast.makeText(this, "已粘贴到军团" + (nationSelRow + 1), Toast.LENGTH_SHORT).show();
+                },
+                () -> {
+                    if (nationClipboard == null) {
+                        Toast.makeText(this, "请先复制配置", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    for (int i = 0; i < nationValues.length; i++) stringToRow(nationClipboard, i);
+                    renderNationTable();
+                    Toast.makeText(this, "已应用到全部 " + nationValues.length + " 个军团", Toast.LENGTH_SHORT).show();
+                },
+                this::batchEditNationField,
+                this::saveNationConfig,
+        };
+        for (int i = 0; i < labels.length; i++) {
+            final Runnable act = actions[i];
+            Button btn = new Button(this);
+            btn.setText(labels[i]);
+            btn.setTextSize(11);
+            btn.setTextColor(Color.WHITE);
+            btn.setBackgroundColor(i == 4 ? Color.parseColor("#16a34a") : Color.parseColor("#1e5fa8"));
+            btn.setPadding(2, 0, 2, 0);
+            btn.setOnClickListener(v -> act.run());
+            bar.addView(btn, new LinearLayout.LayoutParams(0, 40 * density, 1f));
+        }
+        root.addView(bar);
+
+        TextView hint = new TextView(this);
+        hint.setText("点最左列「军团N」选中行（整行变蓝）· 点单元格改值 · 国家ID/国家颜色 有专门选择器 · 列名与熊编辑器一致");
+        hint.setTextSize(10);
+        hint.setTextColor(0xFF9ca3af);
+        hint.setPadding(2, 6, 2, 6);
+        root.addView(hint);
+
+        LinearLayout table = new LinearLayout(this);
+        table.setOrientation(LinearLayout.VERTICAL);
+        nationHeaderBox = new LinearLayout(this);
+        nationHeaderBox.setOrientation(LinearLayout.HORIZONTAL);
+        nationRowsBox = new LinearLayout(this);
+        nationRowsBox.setOrientation(LinearLayout.VERTICAL);
+        table.addView(nationHeaderBox);
+        android.widget.ScrollView vs = new android.widget.ScrollView(this);
+        vs.addView(nationRowsBox);
+        table.addView(vs, new LinearLayout.LayoutParams(-2, 0, 1f));
+
+        android.widget.HorizontalScrollView hs = new android.widget.HorizontalScrollView(this);
+        hs.addView(table, new android.widget.HorizontalScrollView.LayoutParams(-2, -1));
+        root.addView(hs, new LinearLayout.LayoutParams(-1, 0, 1f));
+
+        AlertDialog.Builder b = new AlertDialog.Builder(this, R.style.DarkDialog);
+        b.setTitle("国家配置（" + n + " 个军团）");
+        b.setView(root);
+        b.setNegativeButton("关闭", null);
+        final AlertDialog dlg = b.create();
+        dlg.show();
+        renderNationTable();
+    }
+
+    private String rowToString(int row) {
+        if (row < 0 || row >= nationValues.length) return null;
+        StringBuilder sb = new StringBuilder();
+        for (int c = 0; c < nationValues[row].length; c++) {
+            if (c > 0) sb.append(',');
+            sb.append(nationValues[row][c]);
+        }
+        return sb.toString();
+    }
+
+    private void stringToRow(String s, int row) {
+        if (s == null || row < 0 || row >= nationValues.length) return;
+        String[] parts = s.split(",");
+        for (int c = 0; c < nationValues[row].length && c < parts.length; c++) {
+            try {
+                nationValues[row][c] = Integer.parseInt(parts[c]);
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    private void renderNationTable() {
+        if (nationHeaderBox == null || nationRowsBox == null || nationValues == null) return;
+        final int density = (int) getResources().getDisplayMetrics().density;
+        nationHeaderBox.removeAllViews();
+        nationRowsBox.removeAllViews();
+        nationHeaderBox.addView(nationCell("军团", 64 * density, 0xFF1f2937, true, null, -1));
+        for (int c = 0; c < LEGION_FIELDS.length; c++) {
+            int off = Integer.decode(LEGION_FIELDS[c][2]);
+            String name = LEGION_NAMES.containsKey(off) ? LEGION_NAMES.get(off) : LEGION_FIELDS[c][0];
+            nationHeaderBox.addView(nationCell(name, 96 * density, 0xFF1f2937, true, null, -1));
+        }
+        for (int i = 0; i < nationValues.length; i++) {
+            LinearLayout rowBox = new LinearLayout(this);
+            rowBox.setOrientation(LinearLayout.HORIZONTAL);
+            final int row = i;
+            boolean sel = (i == nationSelRow);
+            TextView idx = nationCell("军团" + (i + 1), 64 * density,
+                    sel ? 0xFF1d4ed8 : 0xFF26262c, true, null, -1);
+            idx.setOnClickListener(v -> {
+                nationSelRow = row;
+                renderNationTable();
+            });
+            rowBox.addView(idx);
+            for (int c = 0; c < LEGION_FIELDS.length; c++) {
+                final int col = c;
+                int off = Integer.decode(LEGION_FIELDS[c][2]);
+                String type = LEGION_FIELDS[c][1];
+                int val = nationValues[i][c];
+                String text;
+                int bg = sel ? 0xFF1e3a8a : 0xFF26262c;
+                if (off == 0x28) {
+                    text = String.format("#%06X", val & 0xFFFFFF);
+                    bg = val;
+                } else if (off == 0x4) {
+                    text = val + " - " + CountryData.name(val);
+                } else if ("f32".equals(type)) {
+                    text = String.valueOf(Float.intBitsToFloat(val));
+                } else {
+                    text = String.valueOf(val);
+                }
+                TextView cell = nationCell(text, 96 * density, bg, false, type, off);
+                cell.setOnClickListener(v -> editNationCell(row, col));
+                rowBox.addView(cell);
+            }
+            nationRowsBox.addView(rowBox);
+        }
+    }
+
+    private TextView nationCell(String text, int width, int bg, boolean bold, String type, int off) {
+        TextView tv = new TextView(this);
+        tv.setText(text);
+        tv.setTextSize(11);
+        tv.setSingleLine(true);
+        tv.setGravity(Gravity.CENTER_VERTICAL);
+        tv.setPadding(6, 8, 6, 8);
+        tv.setLayoutParams(new LinearLayout.LayoutParams(width, -2));
+        tv.setBackgroundColor(bg);
+        tv.setTextColor((off == 0x28) ? 0xFF111111 : 0xFFe5e7eb);
+        if (bold) tv.setTypeface(null, android.graphics.Typeface.BOLD);
+        return tv;
+    }
+
+    private void editNationCell(final int row, final int col) {
+        final int off = Integer.decode(LEGION_FIELDS[col][2]);
+        final String type = LEGION_FIELDS[col][1];
+        String name = LEGION_NAMES.containsKey(off) ? LEGION_NAMES.get(off) : LEGION_FIELDS[col][0];
+        if (off == 0x4) {
+            String[] items = new String[48];
+            for (int i = 0; i < 48; i++) items[i] = (i + 1) + " - " + CountryData.name(i + 1);
+            new AlertDialog.Builder(this, R.style.DarkDialog)
+                    .setTitle("选择国家（军团" + (row + 1) + "）")
+                    .setItems(items, (d, which) -> {
+                        nationValues[row][col] = which + 1;
+                        renderNationTable();
+                    })
+                    .setNeutralButton("手动输入ID", (d, w) -> inputNationNumber(row, col, name, type, false))
+                    .show();
+            return;
+        }
+        if (off == 0x28) {
+            showColorPicker(nationValues[row][col], c -> {
+                nationValues[row][col] = c;
+                renderNationTable();
+            });
+            return;
+        }
+        inputNationNumber(row, col, name, type, "f32".equals(type));
+    }
+
+    private void inputNationNumber(final int row, final int col, String name, String type, boolean isFloat) {
+        final EditText et = new EditText(this);
+        et.setInputType(isFloat
+                ? (InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL | InputType.TYPE_NUMBER_FLAG_SIGNED)
+                : (InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_SIGNED));
+        et.setText(isFloat ? String.valueOf(Float.intBitsToFloat(nationValues[row][col]))
+                : String.valueOf(nationValues[row][col]));
+        et.setTextColor(0xFFe5e7eb);
+        new AlertDialog.Builder(this, R.style.DarkDialog)
+                .setTitle(name + "（军团" + (row + 1) + "）")
+                .setView(et)
+                .setNegativeButton("取消", null)
+                .setPositiveButton("确定", (d, w) -> {
+                    try {
+                        String s = et.getText().toString().trim();
+                        nationValues[row][col] = isFloat
+                                ? Float.floatToIntBits(Float.parseFloat(s)) : Integer.parseInt(s);
+                        renderNationTable();
+                    } catch (Exception e) {
+                        Toast.makeText(this, "输入无效", Toast.LENGTH_SHORT).show();
+                    }
+                }).show();
+    }
+
+    /** 颜色选择：内置调色板 + 手动输入 HEX。 */
+    private void showColorPicker(int current, final java.util.function.IntConsumer onPick) {
+        final int[] palette = {
+                0xFFe53935, 0xFFd81b60, 0xFF8e24aa, 0xFF5e35b1, 0xFF3949ab, 0xFF1e88e5,
+                0xFF039be5, 0xFF00acc1, 0xFF00897b, 0xFF43a047, 0xFF7cb342, 0xFFc0ca33,
+                0xFFfdd835, 0xFFFFb300, 0xFFfb8c00, 0xFFf4511e, 0xFF6d4c41, 0xFF757575,
+                0xFF546e7a, 0xFFe0e0e0, 0xFFfafa96, 0xFF96aaaa, 0xFF4e342e, 0xFFFFFFFF,
+        };
+        final int density = (int) getResources().getDisplayMetrics().density;
+        LinearLayout grid = new LinearLayout(this);
+        grid.setOrientation(LinearLayout.VERTICAL);
+        grid.setPadding(12, 12, 12, 12);
+        LinearLayout rowBox = null;
+        for (int i = 0; i < palette.length; i++) {
+            if (i % 6 == 0) {
+                rowBox = new LinearLayout(this);
+                rowBox.setOrientation(LinearLayout.HORIZONTAL);
+                grid.addView(rowBox);
+            }
+            final int color = palette[i];
+            View sw = new View(this);
+            sw.setBackgroundColor(color);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(48 * density, 40 * density);
+            lp.setMargins(4, 4, 4, 4);
+            sw.setLayoutParams(lp);
+            sw.setClickable(true);
+            if (rowBox != null) rowBox.addView(sw);
+        }
+        final EditText et = new EditText(this);
+        et.setHint("或输入 HEX，如 fafa96");
+        et.setText(String.format("%06X", current & 0xFFFFFF));
+        et.setTextColor(0xFFe5e7eb);
+        grid.addView(et);
+        final AlertDialog dlg = new AlertDialog.Builder(this, R.style.DarkDialog)
+                .setTitle("选择国家颜色（当前 #" + String.format("%06X", current & 0xFFFFFF) + "）")
+                .setView(grid)
+                .setNegativeButton("取消", null)
+                .setPositiveButton("确定", (d, w) -> {
+                    try {
+                        String s = et.getText().toString().trim().replace("#", "");
+                        int rgb = (int) Long.parseLong(s, 16);
+                        onPick.accept(0xFF000000 | (rgb & 0xFFFFFF));
+                    } catch (Exception e) {
+                        Toast.makeText(this, "HEX 无效", Toast.LENGTH_SHORT).show();
+                    }
+                }).create();
+        dlg.show();
+        for (int i = 0; i < palette.length; i++) {
+            final int color = palette[i];
+            View sw = ((LinearLayout) ((LinearLayout) grid.getChildAt(i / 6)).getChildAt(i % 6));
+            sw.setOnClickListener(v -> {
+                onPick.accept(color);
+                dlg.dismiss();
+            });
+        }
+    }
+
+    /** 批量编辑：选一个字段 → 填值 → 应用到所有军团。 */
+    private void batchEditNationField() {
+        String[] items = new String[LEGION_FIELDS.length];
+        for (int c = 0; c < LEGION_FIELDS.length; c++) {
+            int off = Integer.decode(LEGION_FIELDS[c][2]);
+            items[c] = LEGION_NAMES.containsKey(off) ? LEGION_NAMES.get(off) : LEGION_FIELDS[c][0];
+        }
+        new AlertDialog.Builder(this, R.style.DarkDialog)
+                .setTitle("批量编辑配置：选择字段")
+                .setItems(items, (d, which) -> {
+                    final int col = which;
+                    final EditText et = new EditText(this);
+                    et.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_SIGNED);
+                    et.setText(String.valueOf(nationValues[nationSelRow][col]));
+                    new AlertDialog.Builder(this, R.style.DarkDialog)
+                            .setTitle("把「" + items[col] + "」设为（应用到所有军团）")
+                            .setView(et)
+                            .setNegativeButton("取消", null)
+                            .setPositiveButton("应用", (dd, ww) -> {
+                                try {
+                                    int v = Integer.parseInt(et.getText().toString().trim());
+                                    for (int i = 0; i < nationValues.length; i++) nationValues[i][col] = v;
+                                    renderNationTable();
+                                    Toast.makeText(this, "已应用到全部军团", Toast.LENGTH_SHORT).show();
+                                } catch (Exception e) {
+                                    Toast.makeText(this, "输入无效", Toast.LENGTH_SHORT).show();
+                                }
+                            }).show();
+                }).show();
+    }
+
+    private void saveNationConfig() {
+        if (mapData == null || mapData.legions == null) return;
+        try {
+            history.save(mapData, "国家配置");
+            for (int i = 0; i < nationValues.length && i < mapData.legions.size(); i++) {
+                MapData.Legion lg = mapData.legions.get(i);
+                byte[] raw = lg.raw.clone();
+                for (int c = 0; c < LEGION_FIELDS.length; c++) {
+                    int off = Integer.decode(LEGION_FIELDS[c][2]);
+                    if (off == 0x28) setLegionColor(raw, nationValues[i][c]);
+                    else writeLegionInt(raw, off, nationValues[i][c]);
+                }
+                FileParser.patchLegion(mapData, lg, raw);
+                lg.raw = raw.clone();
+                lg.seq = readLegionInt(raw, 0x0);
+                lg.country = readLegionInt(raw, 0x4);
+                lg.color = legionColorOf(raw);
+                if (mapData.legionColors != null && i < mapData.legionColors.length) {
+                    mapData.legionColors[i] = lg.color;
+                }
+                if (mapData.legionCountries != null && i < mapData.legionCountries.length) {
+                    mapData.legionCountries[i] = lg.country;
+                }
+            }
+            hexMapView.refresh();
+            updateInfo();
+            Toast.makeText(this, "国家配置已保存到地图（记得再点保存写文件）", Toast.LENGTH_LONG).show();
+        } catch (Exception e) {
+            Toast.makeText(this, "保存失败：" + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
     private final java.util.Map<Integer, Bitmap> generalThumbCache = new java.util.HashMap<>();
 
     /** 将领信息文本：名字 + 技能 + 将领勋章 + 单位已装备勋章/勋带。 */
@@ -3097,11 +3527,13 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         acts.add(() -> openDataPanel());
         acts.add(() -> showTailSectionsDialog());
         acts.add(() -> showLegionsOverlay());
+        acts.add(() -> showNationConfigDialog());
         acts.add(() -> {
             if (rightPanel == null) return;
             rightPanel.setVisibility(panelVisible ? View.GONE : View.VISIBLE);
         });
         showDropdownMenu(anchor, new String[]{"btl数据", "数据面板", "数据段列表…", "军团列表",
+                "国家配置（表格）",
                 (panelVisible ? "隐藏属性面板" : "显示属性面板")}, acts);
     }
 
