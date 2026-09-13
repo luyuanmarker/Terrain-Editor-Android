@@ -15,6 +15,9 @@
 # 可选：
 #   APK_NAME          服务器/桌面上的文件名，默认 TerrainEditor-debug.apk
 #   APK_DESKTOP_DIR   桌面目录，默认 ~/Desktop
+#   APK_VERSION_CODE  版本号（整数），默认从 app/build.gradle.kts 读
+#   APK_VERSION_NAME  版本名，默认从 app/build.gradle.kts 读
+#   APK_NOTES         更新说明（会显示在 App 的更新弹窗里）
 
 set -euo pipefail
 
@@ -24,6 +27,9 @@ cd "$ROOT"
 APK_NAME="${APK_NAME:-TerrainEditor-debug.apk}"
 APK_DESKTOP_DIR="${APK_DESKTOP_DIR:-$HOME/Desktop}"
 APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
+APK_VERSION_CODE="${APK_VERSION_CODE:-$(grep -o 'versionCode = [0-9]*' app/build.gradle.kts | grep -o '[0-9]*' | head -1)}"
+APK_VERSION_NAME="${APK_VERSION_NAME:-$(grep -o 'versionName = "[^"]*"' app/build.gradle.kts | sed 's/.*"\(.*\)"/\1/' | head -1)}"
+APK_NOTES="${APK_NOTES:-}"
 
 echo "==> 编译 APK"
 ./gradlew :app:assembleDebug
@@ -38,7 +44,9 @@ UPLOADED=0
 if [[ -n "${APK_UPLOAD_URL:-}" && -n "${APK_UPLOAD_TOKEN:-}" ]]; then
   echo "==> 上传到服务器（HTTPS 接口）"
   RESP="$(curl -sS --max-time 120 -H "X-Token: ${APK_UPLOAD_TOKEN}" \
-      -F "name=${APK_NAME}" -F "apk=@${APK_PATH}" "${APK_UPLOAD_URL}")"
+      -F "name=${APK_NAME}" -F "apk=@${APK_PATH}" \
+      -F "versionCode=${APK_VERSION_CODE}" -F "versionName=${APK_VERSION_NAME}" \
+      -F "notes=${APK_NOTES}" "${APK_UPLOAD_URL}")"
   echo "    $RESP"
   UPLOADED=1
 elif [[ -n "${FTP_HOST:-}" && -n "${FTP_USER:-}" && -n "${FTP_PASS:-}" ]]; then

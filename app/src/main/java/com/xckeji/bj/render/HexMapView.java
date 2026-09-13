@@ -42,6 +42,17 @@ public class HexMapView extends View {
     private boolean showGenerals = true;
     private boolean showFacilities = true;
     private boolean showLabels = true;
+    // 关联高亮：同编制单位 / 同省地块（选中兵种/建筑时联动）
+    private int hlFormation = -1;
+    private int hlProvince = -1;
+
+    public void setHighlightFormation(int formation) { hlFormation = formation; invalidate(); }
+    public void setHighlightProvince(int province) { hlProvince = province; invalidate(); }
+    public void clearHighlights() { hlFormation = -1; hlProvince = -1; invalidate(); }
+
+    private static int armyFormation(MapData.Army a) {
+        return (a != null && a.raw != null && a.raw.length > 4) ? (a.raw[4] & 0xFF) : 1;
+    }
     // 纯移动模式：只允许拖动/缩放画面，点击不选中、不编辑
     private boolean viewOnly = false;
     // 省规划视图：每个地块所在省份解析后的归属军团（0xFF=无归属），
@@ -244,7 +255,7 @@ public class HexMapView extends View {
         if (name == null) return null;
         Bitmap b = buildingByName.get(name);
         if (b == null) {
-            b = load("building/" + name + ".png");
+            b = load("building/" + name + ".webp");
             if (b != null) buildingByName.put(name, b);
         }
         if (b == null && buildingBmps != null) {
@@ -370,7 +381,9 @@ public class HexMapView extends View {
         if (generalId <= 0) return null;
         Bitmap b = generalBmps.get(generalId);
         if (b == null) {
-            b = load("general/" + generalId + ".png");
+            com.xckeji.bj.model.GeneralData g = com.xckeji.bj.model.GeneralData.BY_ID.get(generalId);
+            int photo = (g != null && g.photo > 0) ? g.photo : -1;
+            if (photo > 0) b = load("general/" + photo + ".webp");
             if (b != null) generalBmps.put(generalId, b);
         }
         return b;
@@ -731,6 +744,29 @@ public class HexMapView extends View {
     private void drawSelectionOverlays(Canvas canvas) {
         if (mapData == null) return;
         float s = hs();
+        // 关联高亮：同省地块描边（选中建筑/兵种时显示其所属省）
+        if (hlProvince >= 0 && mapData.provinces != null) {
+            int vw = getWidth(), vh = getHeight();
+            int vx0 = Math.max(0, (int) Math.floor(-offsetX / (1.5f * s)) - 1);
+            int vx1 = Math.min(mapData.width - 1, (int) Math.ceil((vw - offsetX) / (1.5f * s)) + 1);
+            int vy0 = Math.max(0, (int) Math.floor(-offsetY / (s * (float) Math.sqrt(3))) - 2);
+            int vy1 = Math.min(mapData.height - 1,
+                    (int) Math.ceil((vh - offsetY) / (s * (float) Math.sqrt(3))) + 2);
+            Paint pv = new Paint(Paint.ANTI_ALIAS_FLAG);
+            pv.setStyle(Paint.Style.STROKE);
+            pv.setStrokeWidth(Math.max(2f, s * 0.14f));
+            pv.setColor(0xCC10b981);
+            for (int y = vy0; y <= vy1; y++) {
+                for (int x = vx0; x <= vx1; x++) {
+                    int idx = y * mapData.width + x;
+                    if (idx < 0 || idx >= mapData.provinces.length) continue;
+                    if (mapData.provinces[idx] != hlProvince) continue;
+                    float px = hcx(x), py = hcy(x, y);
+                    buildHexPath(px, py);
+                    canvas.drawPath(sharedPath, pv);
+                }
+            }
+        }
         if (mapData.multiSelectMode && mapData.selectedBlocks != null) {
             for (int idx : mapData.selectedBlocks) {
                 int x = idx % mapData.width, y = idx / mapData.width;
@@ -815,6 +851,14 @@ public class HexMapView extends View {
             if (showFlags) drawFlagAndFormation(canvas, a, px, py, iconSize, s, legion);
             // 将领头像（仿枭雄 general 层）
             if (showGenerals) drawGeneralPortrait(canvas, a, px, py, s);
+            // 关联高亮：同编制单位描黄圈
+            if (hlFormation >= 0 && armyFormation(a) == hlFormation) {
+                Paint ring = new Paint(Paint.ANTI_ALIAS_FLAG);
+                ring.setStyle(Paint.Style.STROKE);
+                ring.setStrokeWidth(Math.max(2f, s * 0.1f));
+                ring.setColor(0xFFfbbf24);
+                canvas.drawCircle(px, py, iconSize * 0.62f, ring);
+            }
         }
     }
 
@@ -1370,6 +1414,14 @@ public class HexMapView extends View {
                 if (showFlags) drawFlagAndFormation(canvas, a, px, py, iconSize, s, legion);
                 // 将领头像（仿枭雄 general 层）
                 if (showGenerals) drawGeneralPortrait(canvas, a, px, py, s);
+                // 关联高亮：同编制单位描黄圈
+                if (hlFormation >= 0 && armyFormation(a) == hlFormation) {
+                    Paint ring = new Paint(Paint.ANTI_ALIAS_FLAG);
+                    ring.setStyle(Paint.Style.STROKE);
+                    ring.setStrokeWidth(Math.max(2f, s * 0.1f));
+                    ring.setColor(0xFFfbbf24);
+                    canvas.drawCircle(px, py, iconSize * 0.62f, ring);
+                }
             }
         }
 

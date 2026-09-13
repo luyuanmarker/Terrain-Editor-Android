@@ -100,6 +100,8 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
     // 远程公告地址（同域名）：公告内容在服务器 telemetry/announcement.txt 里改
     private static final String ANNOUNCEMENT_URL =
             "https://dx.xckeji.xyz/telemetry/announcement.php";
+    /** 应用内更新检查（服务器 update.php 读取 apk/latest.json） */
+    private static final String UPDATE_URL = "https://dx.xckeji.xyz/update.php";
     /** 当前版本标识（用于远程版本停用判断）。 */
     private static final String APP_LABEL = "Terrain Editor正式版";
     private HexMapView hexMapView;
@@ -202,6 +204,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
     private ArmyConfig pendingArmyType;
     private int pendingArmyLegion = -1;
     private boolean provinceViewOn = false; // 省规划视图需手动开启；默认只在原地形上叠半透明国家色
+    private long lastBrushHistorySave = 0;  // 笔刷连续涂抹时按时间节流快照
 
     private static final int[] LAND_TYPES = {1,2,3,4,5,6,7,8,9,10,11,12,13,14};
     private static final int[] NAVAL_TYPES = {15,16,17,18,19};
@@ -429,7 +432,8 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
     private Bitmap generalThumb(int id) {
         Bitmap b = generalThumbCache.get(id);
         if (b == null) {
-            b = loadBmp("general/" + id + ".png");
+            GeneralData g = GeneralData.BY_ID.get(id);
+            if (g != null && g.photo > 0) b = loadBmp("general/" + g.photo + ".webp");
             if (b != null) generalThumbCache.put(id, b);
         }
         return b;
@@ -632,7 +636,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
             cell.setGravity(Gravity.CENTER);
             cell.setPadding(6, 6, 6, 6);
             ImageView iv = new ImageView(this);
-            Bitmap bm = loadBmp("building/" + name + ".png");
+            Bitmap bm = loadBmp("building/" + name + ".webp");
             if (bm != null) iv.setImageBitmap(bm);
             iv.setLayoutParams(new LinearLayout.LayoutParams(64 * density, 52 * density));
             iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
@@ -1155,6 +1159,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
     private void loadBtlBytes(byte[] data, String fileName) throws Exception {
         MapData md = FileParser.loadFile(data, fileName);
         mapData = md;
+        history.clear();
         hexMapView.setMapData(md);
         hexMapView.refresh();
         enterEditorAfterLoad();
@@ -1657,6 +1662,88 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         startTelemetryHeartbeat();
         // 拉取远程公告（有新公告才弹窗，一次）
         fetchAnnouncement();
+        // 检查更新（有新版才提示）
+        checkUpdate();
+    }
+
+    // ================= 应用内更新 =================
+    private void checkUpdate() {
+        new Thread(() -> {
+            try {
+                byte[] data = httpGet(UPDATE_URL);
+                org.json.JSONObject o = new org.json.JSONObject(new String(data, "UTF-8"));
+                if (!o.optBoolean("ok", false)) return;
+                final int vc = o.optInt("versionCode", 0);
+                final String vn = o.optString("versionName", "");
+                final String url = o.optString("url", "");
+                final String notes = o.optString("notes", "");
+                if (vc <= BuildConfig.VERSION_CODE || url.isEmpty()) return;
+                runOnUiThread(() -> showUpdateDialog(vn, notes, url));
+            } catch (Exception ignored) {
+            }
+        }).start();
+    }
+
+    private void showUpdateDialog(String versionName, String notes, final String url) {
+        AlertDialog.Builder b = new AlertDialog.Builder(this, R.style.DarkDialog);
+        b.setTitle("发现新版本 " + (versionName.isEmpty() ? "" : versionName));
+        TextView tv = new TextView(this);
+        tv.setText((notes.isEmpty() ? "有新版本可用。" : notes) + "\n\n点「立即更新」下载并安装（约十几 MB，请连 Wi-Fi）。");
+        tv.setTextSize(13);
+        tv.setTextColor(0xFFd1d5db);
+        tv.setPadding(28, 16, 28, 16);
+        b.setView(tv);
+        b.setNegativeButton("以后再说", null);
+        b.setPositiveButton("立即更新", (d, w) -> downloadAndInstall(url));
+        b.show();
+    }
+
+    private void downloadAndInstall(final String url) {
+        Toast.makeText(this, "开始下载更新…", Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            try {
+                java.net.HttpURLConnection c = (java.net.HttpURLConnection)
+                        new java.net.URL(url).openConnection();
+                c.setConnectTimeout(15000);
+                c.setReadTimeout(120000);
+                java.io.InputStream in = c.getInputStream();
+                final java.io.File apk = new java.io.File(getCacheDir(), "update.apk");
+                java.io.FileOutputStream fos = new java.io.FileOutputStream(apk);
+                byte[] buf = new byte[65536];
+                int n;
+                while ((n = in.read(buf)) > 0) fos.write(buf, 0, n);
+                fos.close();
+                in.close();
+                c.disconnect();
+                if (apk.length() < 1024) throw new Exception("下载内容无效");
+                runOnUiThread(() -> installApk(apk));
+            } catch (Exception e) {
+                runOnUiThread(() -> Toast.makeText(this,
+                        "下载失败: " + e.getMessage(), Toast.LENGTH_LONG).show());
+            }
+        }).start();
+    }
+
+    private void installApk(java.io.File apk) {
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 26
+                    && !getPackageManager().canRequestPackageInstalls()) {
+                Toast.makeText(this, "请先允许本应用「安装未知应用」，再点一次更新", Toast.LENGTH_LONG).show();
+                Intent set = new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                        android.net.Uri.parse("package:" + getPackageName()));
+                startActivity(set);
+                return;
+            }
+            android.net.Uri uri = androidx.core.content.FileProvider.getUriForFile(this,
+                    getPackageName() + ".fileprovider", apk);
+            Intent i = new Intent(Intent.ACTION_VIEW);
+            i.setDataAndType(uri, "application/vnd.android.package-archive");
+            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(i);
+        } catch (Exception e) {
+            Toast.makeText(this, "安装失败: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
     }
 
     /** 崩溃时把堆栈上报到服务器（远程诊断闪退原因），失败静默。 */
@@ -2929,9 +3016,28 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         undoBtn = makeTopBtn("撤销");
         undoBtn.setOnClickListener(v -> {
             if (mapData==null||!history.canUndo()) return;
-            history.undo(mapData); hexMapView.refresh(); updateInfo(); updateBtnState();
+            String label = history.undo(mapData);
+            hexMapView.refresh();
+            updateInfo();
+            updateBtnState();
+            if (label != null) {
+                Toast.makeText(this, "已撤销：" + label, Toast.LENGTH_SHORT).show();
+            } else {
+                Toast.makeText(this, "地图结构已改变，无法撤销", Toast.LENGTH_SHORT).show();
+            }
         });
         bar.addView(undoBtn); bar.addView(spacer(4));
+
+        redoBtn = makeTopBtn("重做");
+        redoBtn.setOnClickListener(v -> {
+            if (mapData == null || !history.canRedo()) return;
+            history.redo(mapData);
+            hexMapView.refresh();
+            updateInfo();
+            updateBtnState();
+            Toast.makeText(this, "已重做", Toast.LENGTH_SHORT).show();
+        });
+        bar.addView(redoBtn); bar.addView(spacer(4));
 
         // 工具栏可横向滑动，手机窄屏时所有操作均可访问。
         String[] labels = {"新建BTL","编辑器","地图","视图"};
@@ -3406,6 +3512,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
                 }
             }
             try {
+                history.save(mapData, "修改城市");
                 FileParser.patchBuilding(mapData, b, raw);
                 hexMapView.refresh();
                 updateInfo();
@@ -4050,6 +4157,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
             if (cfg == null) continue;
             byte[] raw = buildNewArmyRaw(x, y, cfg);
             try {
+                history.save(mapData, "随机兵力");
                 FileParser.addArmy(mapData, x, y, cfg.army, raw, legion);
                 placed++;
             } catch (Exception ignored) {
@@ -4081,6 +4189,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         try {
             int w = Math.abs(cropX2 - cropX1) + 1;
             int h = Math.abs(cropY2 - cropY1) + 1;
+            history.clear(); // 尺寸改变，旧快照作废
             FileParser.cropMap(mapData, cropX1, cropY1, cropX2, cropY2);
             currentFileName = "截取_" + w + "x" + h + ".btl";
             cancelCrop();
@@ -5417,6 +5526,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
                 writeArmyField(raw, 0x2, "u8", armyTypePickerValue);
             }
             try {
+                history.save(mapData, "修改兵种");
                 FileParser.patchArmy(mapData, army, raw);
                 FileParser.refreshArmies(mapData);
                 hexMapView.refresh();
@@ -5704,7 +5814,8 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         }
         final MapData.Building b = selectedBuilding;
         TextView head = new TextView(this);
-        head.setText("建筑32 记录（" + buildingTypeName(b.type) + " (" + b.x + "," + b.y + ")）");
+        head.setText("建筑32 记录（" + buildingTypeName(b.type) + " (" + b.x + "," + b.y + ")）"
+                + provinceInfoText(b.y * mapData.width + b.x));
         head.setTextSize(12);
         head.setTextColor(0xFF1f2937);
         head.setTypeface(null, android.graphics.Typeface.BOLD);
@@ -5721,7 +5832,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         iconPreview.setLayoutParams(new LinearLayout.LayoutParams(64 * iconDensity, 52 * iconDensity));
         iconPreview.setScaleType(ImageView.ScaleType.FIT_CENTER);
         Bitmap curIcon = loadBmp("building/"
-                + HexMapView.buildingImageName(b.raw[4] & 0xFF, b.raw[5] & 0xFF) + ".png");
+                + HexMapView.buildingImageName(b.raw[4] & 0xFF, b.raw[5] & 0xFF) + ".webp");
         if (curIcon != null) iconPreview.setImageBitmap(curIcon);
         iconRowBox.addView(iconPreview);
         TextView iconLabel = new TextView(this);
@@ -5760,6 +5871,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
                 }
             }
             try {
+                history.save(mapData, "修改城市");
                 FileParser.patchBuilding(mapData, b, raw);
                 hexMapView.refresh();
                 updateInfo();
@@ -5847,12 +5959,14 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
             try {
                 if (b.index < 0) {
                     // 新放置建筑：保存草稿，保存地图时写入文件
+                    history.save(mapData, "修改建筑");
                     b.raw = raw;
                     mapData.newBuildingRaws.put(b.coord, raw.clone());
                     hexMapView.refresh();
                     updateInfo();
                     Toast.makeText(this, "已保存（保存地图时写入文件）", Toast.LENGTH_SHORT).show();
                 } else {
+                    history.save(mapData, "修改建筑");
                     FileParser.patchBuilding(mapData, b, raw);
                     hexMapView.refresh();
                     updateInfo();
@@ -6017,6 +6131,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
                 raw[4] = (byte) (level & 0xFF);
                 raw[6] = (byte) (hp & 0xFF);
                 raw[7] = (byte) ((hp >>> 8) & 0xFF);
+                history.save(mapData, "修改地雷");
                 FileParser.patchTrap(mapData, t, raw);
                 t.legion = legion;
                 t.level = level;
@@ -6038,6 +6153,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         delBtn.setBackgroundColor(Color.parseColor("#e11d48"));
         delBtn.setOnClickListener(v -> {
             try {
+                history.save(mapData, "删除地雷");
                 FileParser.removeMine(mapData, t);
                 selectedTrap = null;
                 lastEditedTrap = null;
@@ -6140,6 +6256,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         playSelectSfx();
         if (addingArmy && pendingArmyType != null && mapData != null) {
             try {
+                history.save(mapData, "放置兵种");
                 byte[] raw = buildNewArmyRaw(x, y, pendingArmyType);
                 String name = pendingArmyType.name;
                 FileParser.addArmy(mapData, x, y, pendingArmyType.army, raw, pendingArmyLegion);
@@ -6157,6 +6274,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         // 添加地雷模式：点击地块放置地雷（等级1，血量60，归属跟随地块）
         if (addingMine && mapData != null && mapData.btlOriginalData != null) {
             try {
+                history.save(mapData, "放置地雷");
                 int legion = tileOwnershipLegion(x, y);
                 FileParser.addMine(mapData, x, y, legion);
                 addingMine = false;
@@ -6240,6 +6358,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
                 highlightArmyIcons();
             } else {
                 try {
+                    history.save(mapData, "放置兵种");
                     int legion = tileOwnershipLegion(x, y);
                     byte[] raw = buildNewArmyRaw(x, y, cfg);
                     FileParser.addArmy(mapData, x, y, cfg.army, raw, legion);
@@ -6307,6 +6426,10 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         ArmyConfig cfg = ArmyConfig.byArmy(mapData.selectedArmyType);
         if (cfg == null) return;
         try {
+            if (System.currentTimeMillis() - lastBrushHistorySave > 800) {
+                history.save(mapData, "笔刷放置兵种");
+                lastBrushHistorySave = System.currentTimeMillis();
+            }
             byte[] raw = buildNewArmyRaw(x, y, cfg);
             int idx = y * mapData.width + x;
             int leg = tileOwnershipLegion(x, y); // 归属跟随省区（省代表格归属）
@@ -6320,12 +6443,17 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         if (mapData == null) return;
         if (fileInfoView != null) fileInfoView.setText("文件: " + currentFileName);
         int sx = hexMapView.getSelectedX(), sy = hexMapView.getSelectedY();
+        int selProvince = -1;
         if (sx >= 0) {
             TerrainTile t = mapData.getTile(sx, sy);
             int bid = mapData.getBuildingId(sx, sy);
             int idx = sy * mapData.width + sx;
+            if (mapData.provinces != null && idx >= 0 && idx < mapData.provinces.length) {
+                selProvince = mapData.provinces[idx];
+            }
             blockIdText.setText(String.format("地块 #%d", idx));
             String info = String.format("ID: %d (G=%d, Id=%d)", idx, t.bmTerrain1Group, t.bmTerrain1Id);
+            info += provinceInfoText(idx);
             selectedArmy = null;
             if (mapData.armies != null) {
                 for (MapData.Army a : mapData.armies) {
@@ -6342,9 +6470,20 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
                     }
                 }
             }
+            // 关联高亮：选中兵种时高亮同编制单位 + 所在省
+            if (selectedArmy != null) {
+                int f = (selectedArmy.raw != null && selectedArmy.raw.length > 4)
+                        ? (selectedArmy.raw[4] & 0xFF) : 1;
+                hexMapView.setHighlightFormation(f);
+                info += "\n编制 " + f + "：地图上同编制单位已高亮";
+            } else {
+                hexMapView.setHighlightFormation(-1);
+            }
+            hexMapView.setHighlightProvince(selProvince);
             selectedInfo.setText(info);
         } else {
             selectedArmy = null;
+            hexMapView.clearHighlights();
         }
         // 同步选中的城市/建筑记录（新放置的建筑也允许编辑）
         selectedBuilding = null;
@@ -6375,6 +6514,11 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
                 }
                 selectedBuilding = draftBuilding;
             }
+            if (selectedBuilding != null) {
+                // 关联高亮：建筑所在省整片描边
+                hexMapView.setHighlightFormation(-1);
+                hexMapView.setHighlightProvince(selProvince);
+            }
         }
         if (selectedArmy != lastEditedArmy) {
             lastEditedArmy = selectedArmy;
@@ -6401,6 +6545,20 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         }
         int total = mapData.getTotalTiles();
         mapInfo.setText(String.format(" %dx%d %d格 %d%% %d", mapData.width, mapData.height, total, total>0?mapData.getWaterCount()*100/total:0, mapData.getBuildingCount()));
+    }
+
+    /** 省区与归属文本（用于地块信息/城市页显示）。 */
+    private String provinceInfoText(int cellIdx) {
+        if (mapData == null || mapData.provinces == null
+                || cellIdx < 0 || cellIdx >= mapData.provinces.length) return "";
+        int pv = mapData.provinces[cellIdx];
+        if (pv == 0 || pv == 0xFFFF) return "\n省区：无（中立地块）";
+        int leg = (mapData.belongs != null && pv < mapData.belongs.length)
+                ? (mapData.belongs[pv] & 0xFF) : 0xFF;
+        String own = (leg != 0xFF && mapData.legionCountries != null && leg < mapData.legionCountries.length)
+                ? ("军团" + (leg + 1) + "（" + CountryData.name(mapData.legionCountries[leg]) + "）")
+                : "中立";
+        return "\n省区：#" + pv + " · 归属：" + own;
     }
 
     private String getBName(int id) {

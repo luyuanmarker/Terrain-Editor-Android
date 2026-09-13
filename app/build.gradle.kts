@@ -5,13 +5,14 @@ plugins {
 android {
     namespace = "com.xckeji.bj"
     compileSdk = 34
+    buildFeatures { buildConfig = true }
 
     defaultConfig {
         applicationId = "com.xckeji.bj"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "2.0"
+        versionCode = 3
+        versionName = "2.1"
     }
 
     buildTypes {
