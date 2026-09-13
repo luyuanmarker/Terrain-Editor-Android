@@ -428,6 +428,19 @@ public class FileParser {
             }
             if (fixed) { /* 援军无内存副本，直接改原始数据即可 */ }
         }
+        // 海洋区划：地形组=1（海洋）的格子，行政区划必须为 0xFFFF（官方规则）
+        int oceanFixed = fixOceanDistricts(mapData);
+        if (oceanFixed > 0) {
+            issues.add("海洋区划修复：" + oceanFixed + " 个海洋地块（地形组=1）的行政区划已强制为 65535");
+        }
+        // 特殊胜利条件：v1 / v2 必须为 1
+        if (h.version <= 2) {
+            int sv = le32(data, 0x54);
+            if (sv != 1) {
+                issues.add("特殊胜利条件：v" + h.version + " 应为 1，当前 " + sv + "，已修正");
+                put32(data, 0x54, 1);
+            }
+        }
         return issues;
     }
 
@@ -436,6 +449,64 @@ public class FileParser {
         d[o + 1] = (byte) ((v >> 8) & 0xFF);
         d[o + 2] = (byte) ((v >> 16) & 0xFF);
         d[o + 3] = (byte) ((v >> 24) & 0xFF);
+    }
+
+    /**
+     * 生成官方 world.bin（仅地图序号=0 的战役 BTL）：
+     * 8 字节魔数 59 53 41 45 04 00 00 00 + uint32 宽 + uint32 高 + 每格 16 字节地形 + 每格 2 字节行政区划。
+     * 海洋格（地形组=1）的行政区划按官方规则强制写 0xFFFF。
+     */
+    public static byte[] generateWorldBin(MapData mapData) throws IOException {
+        if (mapData == null || mapData.btlOriginalData == null) {
+            throw new IOException("请先加载战役 BTL（地图序号=0）");
+        }
+        BtlHeaderInfo h = parseBTLHeader(mapData.btlOriginalData);
+        if (h.mapId != 0) {
+            throw new IOException("仅地图序号=0 的 BTL 支持生成 world.bin（征服地图请用「保存」输出底图）");
+        }
+        int w = mapData.width, ht = mapData.height;
+        if (w <= 0 || ht <= 0) throw new IOException("地图长宽无效");
+        int total = w * ht;
+        byte[] out = new byte[16 + total * 16 + total * 2];
+        out[0] = 89; out[1] = 83; out[2] = 65; out[3] = 69; // "YSAE"
+        out[4] = 4;
+        put32(out, 8, w);
+        put32(out, 12, ht);
+        for (int i = 0; i < total; i++) {
+            TerrainTile t = mapData.tiles.get(i);
+            if (t != null) t.toBytes(out, 16 + i * 16);
+            int pv = (mapData.provinces != null && i < mapData.provinces.length)
+                    ? mapData.provinces[i] : 0xFFFF;
+            if (t != null && t.bmTerrain1Group == 1) pv = 0xFFFF;   // 海洋区划规则
+            if (pv != 0xFFFF && (pv < 0 || pv >= total)) pv = 0xFFFF;
+            int off = 16 + total * 16 + i * 2;
+            out[off] = (byte) (pv & 0xFF);
+            out[off + 1] = (byte) ((pv >>> 8) & 0xFF);
+        }
+        return out;
+    }
+
+    /** 海洋区划自动修正：地形组=1 的格子，行政区划（省规划）必须是 0xFFFF；返回修正数量。 */
+    public static int fixOceanDistricts(MapData mapData) {
+        if (mapData == null || mapData.provinces == null || mapData.tiles == null
+                || mapData.btlOriginalData == null) return 0;
+        BtlHeaderInfo h = parseBTLHeader(mapData.btlOriginalData);
+        int total = Math.min(mapData.getTotalTiles(), mapData.provinces.length);
+        int adminStart = h.terrainStart + (h.independentTerrain ? h.width * h.height * 16 : 0);
+        int fixed = 0;
+        for (int i = 0; i < total; i++) {
+            TerrainTile t = mapData.tiles.get(i);
+            if (t == null || t.bmTerrain1Group != 1) continue;
+            if (mapData.provinces[i] == 0xFFFF) continue;
+            mapData.provinces[i] = 0xFFFF;
+            int off = adminStart + i * 2;
+            if (off + 1 < mapData.btlOriginalData.length) {
+                mapData.btlOriginalData[off] = (byte) 0xFF;
+                mapData.btlOriginalData[off + 1] = (byte) 0xFF;
+            }
+            fixed++;
+        }
+        return fixed;
     }
 
     /** 通用尾段记录写回：把 raw 覆盖到 btlOriginalData 对应位置（坐标字段如需重映射请自行处理）。 */

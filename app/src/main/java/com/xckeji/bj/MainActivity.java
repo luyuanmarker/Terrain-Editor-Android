@@ -3112,12 +3112,94 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         }
         java.util.List<Runnable> acts = new java.util.ArrayList<>();
         acts.add(() -> validateAndFixDialog());
+        acts.add(() -> generateWorldBinNow());
+        acts.add(() -> shrinkMapDialog());
         acts.add(() -> showExpandDirectionDialog());
         acts.add(() -> startCropSelect());
         acts.add(() -> randomizeTerrainDialog());
         acts.add(() -> randomizeArmiesDialog());
-        showDropdownMenu(anchor, new String[]{"校验并修复…", "扩展地图…", "截取地图…", "随机地形…",
-                "随机兵力…"}, acts);
+        showDropdownMenu(anchor, new String[]{"校验并修复…", "生成 world.bin…", "收缩地图…",
+                "扩展地图…", "截取地图…", "随机地形…", "随机兵力…"}, acts);
+    }
+
+    /** 生成官方 world.bin（仅战役 BTL）：16 字节头 + 地形 + 行政区划，海洋区划强制 0xFFFF。 */
+    private void generateWorldBinNow() {
+        if (mapData == null || mapData.btlOriginalData == null) {
+            Toast.makeText(this, "请先加载地图", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        try {
+            byte[] data = FileParser.generateWorldBin(mapData);
+            if (!ensureStorageAccess()) return;
+            String base = currentFileName == null ? "map" : currentFileName.replaceAll("(?i)\\.btl$", "");
+            String name = "world" + base + ".bin";
+            String dirPath = customSavePath == null || customSavePath.isEmpty()
+                    ? new java.io.File(android.os.Environment.getExternalStorageDirectory(),
+                            "地图编辑器").getAbsolutePath()
+                    : customSavePath;
+            java.io.File dir = new java.io.File(dirPath);
+            if (!dir.exists()) dir.mkdirs();
+            java.io.File out = new java.io.File(dir, name);
+            java.io.FileOutputStream fos = new java.io.FileOutputStream(out);
+            fos.write(data);
+            fos.close();
+            Toast.makeText(this, "✅ 已生成 " + name + "\n" + mapData.width + "×" + mapData.height
+                    + "，共 " + (mapData.width * mapData.height) + " 格\n位置：" + out.getAbsolutePath(),
+                    Toast.LENGTH_LONG).show();
+        } catch (Exception e) {
+            Toast.makeText(this, "生成失败：" + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    /** 收缩地图：四方向去掉边缘若干行/列（与扩展地图对称，内容坐标自动重映射）。 */
+    private void shrinkMapDialog() {
+        if (mapData == null) {
+            Toast.makeText(this, "请先加载地图", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        final int w = mapData.width, h = mapData.height;
+        String[] dirs = {"向上收缩（去掉顶部若干行）", "向下收缩（去掉底部若干行）",
+                "向左收缩（去掉左侧若干列）", "向右收缩（去掉右侧若干列）"};
+        new AlertDialog.Builder(this, R.style.DarkDialog)
+                .setTitle("收缩地图（当前 " + w + "×" + h + "）")
+                .setItems(dirs, (d, which) -> {
+                    final EditText et = new EditText(this);
+                    et.setInputType(InputType.TYPE_CLASS_NUMBER);
+                    et.setText("1");
+                    et.setTextColor(0xFFe5e7eb);
+                    new AlertDialog.Builder(this, R.style.DarkDialog)
+                            .setTitle("输入要收缩的" + (which <= 1 ? "行数" : "列数"))
+                            .setView(et)
+                            .setNegativeButton("取消", null)
+                            .setPositiveButton("确定", (dd, ww) -> {
+                                int n;
+                                try {
+                                    n = Integer.parseInt(et.getText().toString().trim());
+                                } catch (Exception e) {
+                                    n = 0;
+                                }
+                                if (n <= 0) return;
+                                if ((which <= 1 && n >= h) || (which >= 2 && n >= w)) {
+                                    Toast.makeText(this, "收缩数量不能超过或等于当前" + (which <= 1 ? "行数" : "列数"),
+                                            Toast.LENGTH_LONG).show();
+                                    return;
+                                }
+                                try {
+                                    history.clear();
+                                    if (which == 0) FileParser.cropMap(mapData, 0, n, w - 1, h - 1);
+                                    else if (which == 1) FileParser.cropMap(mapData, 0, 0, w - 1, h - 1 - n);
+                                    else if (which == 2) FileParser.cropMap(mapData, n, 0, w - 1, h - 1);
+                                    else FileParser.cropMap(mapData, 0, 0, w - 1 - n, h - 1);
+                                    hexMapView.setMapData(mapData);
+                                    hexMapView.refresh();
+                                    updateInfo();
+                                    Toast.makeText(this, "已收缩为 " + mapData.width + "×" + mapData.height,
+                                            Toast.LENGTH_LONG).show();
+                                } catch (Exception e) {
+                                    Toast.makeText(this, "收缩失败：" + e.getMessage(), Toast.LENGTH_LONG).show();
+                                }
+                            }).show();
+                }).show();
     }
 
     private void showViewPopup(View anchor) {
