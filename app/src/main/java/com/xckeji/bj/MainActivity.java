@@ -3096,11 +3096,12 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         acts.add(() -> showBtlDataOverlay());
         acts.add(() -> openDataPanel());
         acts.add(() -> showTailSectionsDialog());
+        acts.add(() -> showLegionsOverlay());
         acts.add(() -> {
             if (rightPanel == null) return;
             rightPanel.setVisibility(panelVisible ? View.GONE : View.VISIBLE);
         });
-        showDropdownMenu(anchor, new String[]{"btl数据", "数据面板", "数据段列表…",
+        showDropdownMenu(anchor, new String[]{"btl数据", "数据面板", "数据段列表…", "军团列表",
                 (panelVisible ? "隐藏属性面板" : "显示属性面板")}, acts);
     }
 
@@ -3115,27 +3116,18 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         acts.add(() -> startCropSelect());
         acts.add(() -> randomizeTerrainDialog());
         acts.add(() -> randomizeArmiesDialog());
-        acts.add(() -> showBuildingListOverlay());
         showDropdownMenu(anchor, new String[]{"校验并修复…", "扩展地图…", "截取地图…", "随机地形…",
-                "随机兵力…", "城市列表…"}, acts);
+                "随机兵力…"}, acts);
     }
 
     private void showViewPopup(View anchor) {
-        boolean panelVisible = rightPanel != null
-                && rightPanel.getVisibility() == View.VISIBLE;
         java.util.List<Runnable> acts = new java.util.ArrayList<>();
-        acts.add(() -> showLegionsOverlay());
-        acts.add(() -> toggleProvinceView());
         acts.add(() -> showDisplaySettingsDialog());
-        acts.add(() -> rightPanel.setVisibility(panelVisible ? View.GONE : View.VISIBLE));
         acts.add(() -> importOverlay());
         acts.add(() -> importGuideImage());
         acts.add(() -> toggleOverlay());
         showDropdownMenu(anchor, new String[]{
-                "军团列表",
-                (provinceViewOn ? "✔ 省规划视图" : "省规划视图"),
                 "显示设置…",
-                (panelVisible ? "隐藏工具面板" : "显示工具面板"),
                 "导入底图",
                 "导入图填",
                 (hexMapView != null && hexMapView.isOverlayVisible() ? "关闭遮罩" : "开启遮罩")
