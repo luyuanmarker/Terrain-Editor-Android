@@ -41,3 +41,5 @@ app/build/
 
 # Assets or saved maps (if you want to exclude large saved maps, uncomment)
 # app/src/main/assets/btl/
+tools/__pycache__/
+*.pyc
