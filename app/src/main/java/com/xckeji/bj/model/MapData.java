@@ -203,7 +203,6 @@ public class MapData {
         return c;
     }
     
-    public void clearSelectedBlocks() { selectedBlocks.clear(); }
     public boolean hasSelectedBlocks() { return !selectedBlocks.isEmpty(); }
     public void toggleBlockSelection(int index) {
         if (selectedBlocks.contains(index)) selectedBlocks.remove(index);
@@ -329,37 +328,6 @@ public class MapData {
         return OFFICIAL_COAST_BORDER[bits] + 10;
     }
 
-    /** 官方 checkCoast：全图重算海岸线。海面按官方掩码查表补波浪；陆地清除波浪装饰。 */
-    public void recomputeCoastAll() {
-        if (tiles == null) return;
-        for (int i = 0; i < tiles.size(); i++) {
-            TerrainTile t = tiles.get(i);
-            if (t.bmTerrain1Group == 1) {
-                t.decoration1Group = 31;
-                t.decoration1Id = officialCoastWaveId(i);
-                t.decoration1X = 0;
-                t.decoration1Y = 0;
-                t.decoration2Group = 63;
-                t.decoration2Id = 255;
-                t.decoration2X = 0;
-                t.decoration2Y = 0;
-                editedCells.add(i);
-            } else {
-                if (t.decoration1Group == 31 && t.decoration1Id >= 10) {
-                    t.decoration1Group = 63;
-                    t.decoration1Id = 255;
-                    t.decoration1X = 0;
-                    t.decoration1Y = 0;
-                }
-                if (t.decoration2Group == 31 && t.decoration2Id >= 10) {
-                    t.decoration2Group = 63;
-                    t.decoration2Id = 255;
-                    t.decoration2X = 0;
-                    t.decoration2Y = 0;
-                }
-            }
-        }
-    }
     public void applyBuildingToSelected(int bid) {
         for (int idx : selectedBlocks) {
             if (idx >= 0 && idx < buildingIds.size()) {
@@ -375,10 +343,6 @@ public class MapData {
 
     public byte[] getTerrainPattern(int group) {
         return terrainPatterns.get(group);
-    }
-
-    public java.util.List<byte[]> getTerrainPatterns(int group) {
-        return terrainPatternList.get(group);
     }
 
     /** 统计本图每种地形组最常见的完整 16 字节模式，作为涂色的标准贴图模板。 */

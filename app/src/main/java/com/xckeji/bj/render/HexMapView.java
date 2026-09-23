@@ -8,7 +8,6 @@ import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.PointF;
 import android.graphics.Rect;
-import android.graphics.Region;
 import android.graphics.RectF;
 import com.xckeji.bj.R;
 import android.view.GestureDetector;
@@ -19,7 +18,6 @@ import com.xckeji.bj.model.MapData;
 import com.xckeji.bj.model.TerrainColors;
 import com.xckeji.bj.model.TerrainTile;
 
-import java.io.InputStream;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -361,14 +359,6 @@ public class HexMapView extends View {
         viewOnly = v;
         invalidate();
     }
-    public boolean isViewOnly() { return viewOnly; }
-
-    /** 兵种角标数字：显示编制（raw 0x4），无记录时默认 1。 */
-    private String armyBadgeText(MapData.Army a) {
-        int f = (a.raw != null && a.raw.length > 4) ? (a.raw[4] & 0xFF) : 1;
-        return String.valueOf(f);
-    }
-
     /** 兵种图标：优先普通 legion_icon_N，缺失时用 _r_ 变体。 */
     private Bitmap armyIcon(int type) {
         Bitmap b = legionBmps != null ? legionBmps.get(type) : null;
@@ -1024,17 +1014,6 @@ public class HexMapView extends View {
         if (pv == 0 || pv == 0xFFFF) return 0xFFe8ecef;
         float hue = (pv * 137.508f) % 360f;
         return android.graphics.Color.HSVToColor(new float[]{hue, 0.45f, 0.92f});
-    }
-
-    /** 官方规则：省区显示颜色 = 省代表格的军团归属（国家地块颜色）；无归属=中性浅灰。 */
-    private int provinceOwnerColor(int cellIdx) {
-        if (mapData == null || mapData.legionColors == null) return 0xFFe8ecef;
-        int leg = (provinceOwnerLegion != null && cellIdx < provinceOwnerLegion.length)
-                ? provinceOwnerLegion[cellIdx] : 0xFF;
-        if (leg != 0xFF && leg >= 0 && leg < mapData.legionColors.length) {
-            return mapData.legionColors[leg];
-        }
-        return 0xFFe8ecef;
     }
 
     /**
@@ -1715,36 +1694,6 @@ public class HexMapView extends View {
         return result;
     }
 
-    private void tap(float px, float py) {
-        if (mapData == null || viewOnly) return; PointF h = p2h(px,py); if (h == null) return;
-        int x = (int)h.x, y = (int)h.y;
-        if (x>=0 && x<mapData.width && y>=0 && y<mapData.height) {
-            int idx = y * mapData.width + x;
-            // 画笔模式：直接涂抹
-            if (mapData.brushMode) {
-                applyBrush(x, y);
-                return;
-            }
-            // 多选模式：切换选中/取消
-            if (mapData.multiSelectMode) {
-                mapData.toggleBlockSelection(idx);
-                selectedX = x; selectedY = y;
-                invalidate();
-                if (listener != null) listener.onTileSelected(x,y,mapData.getTile(x,y));
-                return;
-            }
-            // 笔刷模式：如果右侧选了地形(G>=0)，点击直接应用
-            if (mapData.selectedTerrainGroup >= 0) {
-                applyBrush(x, y);
-                return;
-            }
-            // 普通选择模式
-            selectedX=x;selectedY=y;
-            invalidate();
-            if (listener != null) listener.onTileSelected(x,y,mapData.getTile(x,y));
-        }
-    }
-
     /** 省区笔刷：把单个地块划入当前选中的省区（可点、可按住拖动连续刷）。 */
     private void paintProvinceAt(int x, int y) {
         if (mapData == null || viewOnly) return;
@@ -1802,7 +1751,4 @@ public class HexMapView extends View {
             int x = (int)h.x, y = (int)h.y; if (x>=0&&x<mapData.width&&y>=0&&y<mapData.height) { mapData.setBuildingId(x,y,0); if (selectedX==x&&selectedY==y&&listener!=null) listener.onTileSelected(x,y,mapData.getTile(x,y)); invalidate(); }
         }
     }
-    public void zoomIn() { float os=scale; scale*=1.3f; if(scale>4.5f)scale=4.5f; float f=scale/os, cx=getWidth()/2f, cy=getHeight()/2f; offsetX=cx-(cx-offsetX)*f; offsetY=cy-(cy-offsetY)*f; clamp(); invalidate(); }
-    public void zoomOut() { float os=scale; scale/=1.3f; if(scale<0.3f)scale=0.3f; float f=scale/os, cx=getWidth()/2f, cy=getHeight()/2f; offsetX=cx-(cx-offsetX)*f; offsetY=cy-(cy-offsetY)*f; clamp(); invalidate(); }
-    public void resetView() { centerMap(); invalidate(); }
 }

@@ -1,6 +1,5 @@
 package com.xckeji.bj.model;
 
-import android.graphics.Color;
 
 public class TerrainColors {
     // HTML terrainColorMap — 完整32种
@@ -61,9 +60,4 @@ public class TerrainColors {
         return "未知";
     }
 
-    public static boolean needsLightText(int groupId) {
-        int c = getColor(groupId);
-        double l = (0.299 * Color.red(c) + 0.587 * Color.green(c) + 0.114 * Color.blue(c)) / 255.0;
-        return l < 0.5;
-    }
 }

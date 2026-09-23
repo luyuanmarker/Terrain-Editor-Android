@@ -31,7 +31,6 @@ import android.view.WindowManager;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.CheckBox;
-import android.widget.CompoundButton;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
@@ -45,7 +44,6 @@ import android.widget.ScrollView;
 import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
-import android.widget.ToggleButton;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -66,8 +64,8 @@ import com.xckeji.bj.render.HexMapView;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
-import java.io.InputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -203,7 +201,6 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
     private boolean addingArmy = false;
     private ArmyConfig pendingArmyType;
     private int pendingArmyLegion = -1;
-    private boolean provinceViewOn = false; // 省规划视图需手动开启；默认只在原地形上叠半透明国家色
     private long lastBrushHistorySave = 0;  // 笔刷连续涂抹时按时间节流快照
 
     private static final int[] LAND_TYPES = {1,2,3,4,5,6,7,8,9,10,11,12,13,14};
@@ -338,67 +335,6 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
     private boolean musicEnabled = true;
     private boolean sfxEnabled = true;
 
-
-    // ===== 魔棒工具：从HTML移植的多选功能 =====
-    private void magicWandSelect(int startX, int startY, boolean exactMatch) {
-        if (mapData == null) return;
-        int w = mapData.width, h = mapData.height;
-        TerrainTile startTile = mapData.getTile(startX, startY);
-        if (startTile == null) return;
-
-        mapData.multiSelectMode = true;
-        mapData.selectedBlocks.clear();
-        closeProvinceEdit();
-
-        int startG = startTile.bmTerrain1Group;
-        int startId = startTile.bmTerrain1Id;
-        boolean[] visited = new boolean[w * h];
-        java.util.Queue<Integer> queue = new java.util.LinkedList<>();
-        int startIdx = startY * w + startX;
-        queue.add(startIdx);
-        visited[startIdx] = true;
-
-        while (!queue.isEmpty()) {
-            int idx = queue.poll();
-            int cx = idx % w, cy = idx / w;
-            mapData.selectedBlocks.add(idx);
-
-            // 六边形邻居偏移（偶数列和奇数列不同）
-            int[][] evenNeighbors = {{-1,0},{-1,-1},{0,-1},{1,-1},{1,0},{0,1}};
-            int[][] oddNeighbors = {{-1,0},{0,-1},{1,-1},{1,0},{1,1},{0,1}};
-            int[][] neighbors = (cx % 2 == 0) ? evenNeighbors : oddNeighbors;
-
-            for (int[] nb : neighbors) {
-                int nx = cx + nb[0], ny = cy + nb[1];
-                if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
-                int nIdx = ny * w + nx;
-                if (visited[nIdx]) continue;
-                visited[nIdx] = true;
-
-                TerrainTile nt = mapData.getTile(nx, ny);
-                if (nt == null) continue;
-                boolean match;
-                if (exactMatch) {
-                    match = (nt.bmTerrain1Group == startG && nt.bmTerrain1Id == startId);
-                } else {
-                    match = (nt.bmTerrain1Group == startG);
-                }
-                if (match) queue.add(nIdx);
-            }
-        }
-        hexMapView.refresh();
-        updateInfo();
-        Toast.makeText(this, "已选中 " + mapData.selectedBlocks.size() + " 个格子", Toast.LENGTH_SHORT).show();
-    }
-
-    private void clearMultiSelection() {
-        if (mapData == null) return;
-        mapData.multiSelectMode = false;
-        mapData.selectedBlocks.clear();
-        hexMapView.refresh();
-        updateInfo();
-        Toast.makeText(this, "已清除多选", Toast.LENGTH_SHORT).show();
-    }
 
     // ===== 校验并修复（规则与枭雄一致） =====
     private void validateAndFixDialog() {
@@ -3681,17 +3617,6 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         }
     }
 
-    private void toggleProvinceView() {
-        if (mapData == null) {
-            Toast.makeText(this, "请先加载地图", Toast.LENGTH_SHORT).show();
-            return;
-        }
-        provinceViewOn = !provinceViewOn;
-        hexMapView.setProvinceView(provinceViewOn);
-        Toast.makeText(this, provinceViewOn ? "省规划视图：按省规划值染色" : "已恢复地形显示",
-                Toast.LENGTH_SHORT).show();
-    }
-
     /** 军团列表覆盖面板：80% 屏，四周空出，右上角关闭，军团竖排。 */
     private void showLegionsOverlay() {
         if (mapData == null || mapData.legions == null || mapData.legions.isEmpty()) {
@@ -4464,56 +4389,6 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         }
     }
 
-    private void toggleAddArmy() {
-        if (mapData == null || mapData.btlOriginalData == null) {
-            Toast.makeText(this, "请先加载 BTL 地图", Toast.LENGTH_SHORT).show();
-            return;
-        }
-        if (addingArmy) {
-            addingArmy = false;
-            pendingArmyType = null;
-            pendingArmyLegion = -1;
-            Toast.makeText(this, "已取消添加兵种", Toast.LENGTH_SHORT).show();
-            return;
-        }
-        if (ArmyConfig.ALL.isEmpty()) {
-            Toast.makeText(this, "兵种数据未加载", Toast.LENGTH_SHORT).show();
-            return;
-        }
-        String[] names = new String[ArmyConfig.ALL.size()];
-        for (int i = 0; i < ArmyConfig.ALL.size(); i++) {
-            ArmyConfig c = ArmyConfig.ALL.get(i);
-            names[i] = c.name + "（代码" + c.army + "）";
-        }
-        AlertDialog.Builder b = new AlertDialog.Builder(this);
-        b.setTitle("选择要放置的兵种");
-        b.setItems(names, (d, w) -> {
-            pendingArmyType = ArmyConfig.ALL.get(w);
-            // 选择归属军团（单位必须有归属，否则游戏闪退）
-            if (mapData.legionColors != null && mapData.legionColors.length > 0) {
-                String[] legions = new String[mapData.legionColors.length];
-                for (int i = 0; i < legions.length; i++) legions[i] = "军团" + (i + 1);
-                AlertDialog.Builder lb = new AlertDialog.Builder(this);
-                lb.setTitle("选择归属军团");
-                lb.setItems(legions, (ld, lw) -> {
-                    pendingArmyLegion = lw;
-                    addingArmy = true;
-                    Toast.makeText(this, "已选择 " + pendingArmyType.name + "（军团" + (lw + 1)
-                            + "），请点击地图上的地块放置", Toast.LENGTH_LONG).show();
-                });
-                lb.setNegativeButton("取消", null);
-                lb.show();
-            } else {
-                pendingArmyLegion = 0;
-                addingArmy = true;
-                Toast.makeText(this, "已选择 " + pendingArmyType.name + "，请点击地图上的地块放置",
-                        Toast.LENGTH_LONG).show();
-            }
-        });
-        b.setNegativeButton("取消", null);
-        b.show();
-    }
-
     /** 随机兵力：输入数量，随机在已归属地块上放置兵种（海洋格出舰船、陆地格出地面部队）。 */
     private void randomizeArmiesDialog() {
         if (mapData == null || mapData.btlOriginalData == null) {
@@ -4692,97 +4567,6 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         }
     }
 
-    private void expandMap() {
-        if (mapData == null) { Toast.makeText(this, "请先加载地图", Toast.LENGTH_SHORT).show(); return; }
-        int curW = mapData.width, curH = mapData.height;
-        AlertDialog.Builder b = new AlertDialog.Builder(this);
-        b.setTitle("扩展地图 (当前 " + curW + "x" + curH + ")");
-        LinearLayout l = new LinearLayout(this);
-        l.setOrientation(LinearLayout.VERTICAL);
-        l.setPadding(40, 20, 40, 20);
-        EditText wi = new EditText(this);
-        wi.setHint("新宽度"); wi.setInputType(InputType.TYPE_CLASS_NUMBER); wi.setText(String.valueOf(curW));
-        EditText hi = new EditText(this);
-        hi.setHint("新高度"); hi.setInputType(InputType.TYPE_CLASS_NUMBER); hi.setText(String.valueOf(curH));
-        l.addView(wi); l.addView(hi);
-        b.setView(l);
-        b.setPositiveButton("扩展", (d, w) -> {
-            int nw = Integer.parseInt(wi.getText().toString());
-            int nh = Integer.parseInt(hi.getText().toString());
-            if (nw < curW || nh < curH || nw > 200 || nh > 200) {
-                Toast.makeText(this, "新尺寸不能小于当前，最大200", Toast.LENGTH_SHORT).show(); return;
-            }
-            if (nw == curW && nh == curH) { Toast.makeText(this, "尺寸未变化", Toast.LENGTH_SHORT).show(); return; }
-            history.save(mapData);
-            expandMapData(mapData, nw, nh);
-            hexMapView.setMapData(mapData);
-            hexMapView.refresh();
-            updateInfo();
-            currentFileName = "扩展地图_" + nw + "x" + nh + ".btl";
-            Toast.makeText(this, "已扩展为 " + nw + "x" + nh, Toast.LENGTH_SHORT).show();
-        });
-        b.setNegativeButton("取消", null);
-        b.show();
-    }
-
-    private void expandMapData(MapData mapData, int newW, int newH) {
-        // 向右下方扩展：旧内容左上对齐，新格填海洋
-        final int oldW = mapData.width;
-        expandMapGeneric(mapData, newW, newH, idx -> (idx / oldW) * newW + (idx % oldW), makeFillTile(true));
-    }
-
-    // ===== 向上扩展（顶部插入n行，原内容向下平移） =====
-    private void showExpandUpDialog() {
-        if (mapData == null) { Toast.makeText(this, "请先加载地图", Toast.LENGTH_SHORT).show(); return; }
-
-        AlertDialog.Builder b = new AlertDialog.Builder(this);
-        b.setTitle("向上扩展地图");
-        LinearLayout l = new LinearLayout(this);
-        l.setOrientation(LinearLayout.VERTICAL);
-        l.setPadding(40, 20, 40, 20);
-
-        final TextView info = new TextView(this);
-        info.setText("当前尺寸: " + mapData.width + "x" + mapData.height);
-        info.setTextSize(13);
-        info.setPadding(0, 0, 0, 12);
-        info.setTextColor(0xFF374151);
-        l.addView(info);
-
-        EditText rowsInput = new EditText(this);
-        rowsInput.setHint("向上扩展行数");
-        rowsInput.setInputType(InputType.TYPE_CLASS_NUMBER);
-        rowsInput.setText("5");
-        l.addView(rowsInput);
-
-        b.setView(l);
-        b.setPositiveButton("扩展", (d, w) -> {
-            try {
-                int n = Integer.parseInt(rowsInput.getText().toString());
-                if (n <= 0 || n > 50) { Toast.makeText(this, "行数范围 1~50", Toast.LENGTH_SHORT).show(); return; }
-                int newH = mapData.height + n;
-                if (newH > 200) { Toast.makeText(this, "最大高度200", Toast.LENGTH_SHORT).show(); return; }
-
-                history.save(mapData);
-                expandMapUp(mapData, n);
-                hexMapView.setMapData(mapData);
-                hexMapView.refresh();
-                updateInfo();
-                currentFileName = "上扩展+" + n + "行_" + mapData.width + "x" + mapData.height + ".btl";
-                Toast.makeText(this, "已向上扩展 " + n + " 行", Toast.LENGTH_SHORT).show();
-            } catch (Exception ex) {
-                Toast.makeText(this, "扩展出错: " + ex.getMessage(), Toast.LENGTH_LONG).show();
-            }
-        });
-        b.setNegativeButton("取消", null);
-        b.show();
-    }
-
-    private void expandMapUp(MapData mapData, int n) {
-        // 向上扩展：顶部插入 n 行，原内容整体下移 n 行
-        final int w = mapData.width;
-        expandMapGeneric(mapData, w, mapData.height + n, idx -> idx + n * w, makeFillTile(true));
-    }
-
     // ===== 顶部“扩展”按钮：四个方向 =====
     /** 扩展地图（完全按枭雄的 WASD 规则）：选方向 → 输距离 → 选填充地形。 */
     private void showExpandDirectionDialog() {
@@ -4887,148 +4671,6 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         }
     }
 
-
-    private void expandMapGeneric(MapData mapData, int newW, int newH,
-                                  java.util.function.IntUnaryOperator remap, TerrainTile fillTile) {
-        if (mapData.binOriginalData != null) {
-            Toast.makeText(this, "征服地图地形来自世界 BIN，不支持扩展", Toast.LENGTH_LONG).show();
-            return;
-        }
-        int oldW = mapData.width, oldH = mapData.height;
-        int oldTotal = oldW * oldH;
-        int newTotal = newW * newH;
-
-        // 旧格 -> 新格索引（四个方向的映射均为一一映射）
-        int[] oldIndexOfNew = new int[newTotal];
-        java.util.Arrays.fill(oldIndexOfNew, -1);
-        for (int i = 0; i < oldTotal; i++) {
-            int ni = remap.applyAsInt(i);
-            if (ni >= 0 && ni < newTotal) oldIndexOfNew[ni] = i;
-        }
-
-        // 1. 内存 tiles/buildingIds 按新布局重建，新格填海洋
-        java.util.List<TerrainTile> oldTiles = new java.util.ArrayList<>(mapData.tiles);
-        java.util.List<Integer> oldBuildings = new java.util.ArrayList<>(mapData.buildingIds);
-        mapData.width = newW;
-        mapData.height = newH;
-        mapData.tiles = new java.util.ArrayList<>(newTotal);
-        mapData.buildingIds = new java.util.ArrayList<>(newTotal);
-        for (int i = 0; i < newTotal; i++) {
-            int oi = oldIndexOfNew[i];
-            if (oi >= 0) {
-                mapData.tiles.add(oldTiles.get(oi));
-                mapData.buildingIds.add(oldBuildings.get(oi));
-            } else {
-                mapData.tiles.add(cloneTerrain(fillTile));
-                mapData.buildingIds.add(0);
-            }
-        }
-
-        // 2. 修正 BTL 原始数据
-        if (mapData.btlOriginalData != null) {
-            try {
-                byte[] oldBtl = mapData.btlOriginalData;
-                FileParser.BtlHeaderInfo header = FileParser.parseBTLHeader(oldBtl);
-                int terrainStart = header.terrainStart;
-
-                int oldAdminStart = terrainStart + oldTotal * 16;
-                int oldOwnershipStart = oldAdminStart + oldTotal * 2;
-                int oldBuildingStart = oldOwnershipStart + oldTotal;
-
-                int newAdminStart = terrainStart + newTotal * 16;
-                int newOwnershipStart = newAdminStart + newTotal * 2;
-                int newBuildingStart = newOwnershipStart + newTotal;
-
-                int afterBuildingSize = oldBtl.length - oldBuildingStart;
-                if (afterBuildingSize < 0) afterBuildingSize = 0;
-
-                int newFileSize = newBuildingStart + afterBuildingSize;
-                byte[] newBtl = new byte[newFileSize];
-
-                // 头部与军团段原样复制
-                System.arraycopy(oldBtl, 0, newBtl, 0, terrainStart);
-
-                // 地形（16字节/格）
-                for (int i = 0; i < newTotal; i++) {
-                    mapData.tiles.get(i).toBytes(newBtl, terrainStart + i * 16);
-                }
-
-                // 省规划（2字节/格）：值是“省份代表地块坐标”，扩展后必须重映射，
-                // 否则地块移位后省坐标仍指向旧位置，游戏里省颜色会错乱
-                for (int i = 0; i < newTotal; i++) {
-                    int addr = newAdminStart + i * 2;
-                    int oi = oldIndexOfNew[i];
-                    if (oi < 0) {
-                        byte v = (byte) (fillTile.bmTerrain1Group == 1 ? 0 : 0xFF);
-                        newBtl[addr] = v;
-                        newBtl[addr + 1] = v;
-                        continue;
-                    }
-                    int oldPv = (oldBtl[oldAdminStart + oi * 2] & 0xFF)
-                            | ((oldBtl[oldAdminStart + oi * 2 + 1] & 0xFF) << 8);
-                    int npv = oldPv;
-                    if (oldPv != 0 && oldPv != 0xFFFF) {
-                        int cb = mapData.coordBase;
-                        int localPv = oldPv - cb;
-                        if (localPv >= 0 && localPv < oldTotal) {
-                            int nLocal = remap.applyAsInt(localPv);
-                            if (nLocal >= 0 && nLocal <= 0xFFFF - cb) npv = nLocal + cb;
-                        }
-                    }
-                    newBtl[addr] = (byte) (npv & 0xFF);
-                    newBtl[addr + 1] = (byte) ((npv >> 8) & 0xFF);
-                }
-
-                // 军团归属（1字节/格）
-                for (int i = 0; i < newTotal; i++) {
-                    int oi = oldIndexOfNew[i];
-                    newBtl[newOwnershipStart + i] = oi >= 0 ? oldBtl[oldOwnershipStart + oi] : (byte) 0xFF;
-                }
-
-                // 建筑及之后所有数据原样搬运
-                if (afterBuildingSize > 0) {
-                    System.arraycopy(oldBtl, oldBuildingStart, newBtl, newBuildingStart, afterBuildingSize);
-                }
-
-                // 建筑坐标重映射
-                if (header.buildingCount > 0 && afterBuildingSize > 0) {
-                    for (int i = 0; i < header.buildingCount; i++) {
-                        int addr = newBuildingStart + i * 32;
-                        if (addr + 4 > newFileSize) break;
-                        int coord = (ByteBuffer.wrap(newBtl).order(ByteOrder.LITTLE_ENDIAN)
-                                .getShort(addr) & 0xFFFF) - mapData.coordBase;
-                        if (coord >= 0 && coord < oldTotal) {
-                            int nc = remap.applyAsInt(coord);
-                            int stored = nc + mapData.coordBase;
-                            newBtl[addr] = (byte) (stored & 0xFF);
-                            newBtl[addr + 1] = (byte) ((stored >>> 8) & 0xFF);
-                        }
-                    }
-                }
-
-                // 建筑之后各业务段（兵种/方案/援军/空袭/陷阱）的地块索引重映射
-                FileParser.remapSectionTileIndexes(newBtl, newBuildingStart, header, remap,
-                        mapData.coordBase);
-
-                // 头部宽高与地块总数
-                ByteBuffer bb = ByteBuffer.wrap(newBtl).order(ByteOrder.LITTLE_ENDIAN);
-                bb.putInt(0x10, newW);
-                bb.putInt(0x14, newH);
-                bb.putInt(0x58, newTotal);
-
-                mapData.btlOriginalData = newBtl;
-                FileParser.refreshArmies(mapData);
-            } catch (Exception e) {
-                android.util.Log.e("EXPAND_DIR", "BTL修正失败", e);
-                Toast.makeText(this, "BTL数据修正失败: " + e.getMessage(), Toast.LENGTH_LONG).show();
-            }
-        }
-    }
-
-    /** 生成填充地形：true=海洋，false=标准平原（与 BTL 模板中的平原地块一致）。 */
-    private static TerrainTile makeFillTile(boolean sea) {
-        return makeFillTileByGroup(sea ? 1 : 0);
-    }
 
     /**
      * 生成指定地形组的填充格。真实游戏文件中陆地和海洋都带有标准装饰层
@@ -5683,97 +5325,11 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         return t;
     }
 
-    private void showArmyDetail(ArmyConfig c) {
-        AlertDialog.Builder b = new AlertDialog.Builder(this);
-        b.setTitle(c.name);
-        b.setMessage("攻击：" + c.minAttack + " - " + c.maxAttack + "\n"
-                + "射程：" + c.minRange + (c.maxRange > c.minRange ? " - " + c.maxRange : "") + "\n"
-                + "生命：" + c.hp + "\n"
-                + "防御：" + c.defence + "\n"
-                + "移动力：" + c.mobility + "\n"
-                + "最大编制：" + c.maxFormation + "\n"
-                + "载具：" + (c.carrier != 0 ? "是" : "否") + "\n"
-                + "建造回合：" + c.buildTime + "\n"
-                + "造价：金钱 " + c.costMoney + " / 齿轮 " + c.costGear + " / 原子 " + c.costAtomic);
-        b.setPositiveButton("关闭", null);
-        b.show();
-    }
-
-    /** 兵种选择列表（像地形一样）：点选后点击地图放置，可加入任意容器（如设施页建筑列表旁）。 */
-    private void buildArmyAddRows(final LinearLayout target) {
-        if (target == null) return;
-        int density = (int) getResources().getDisplayMetrics().density;
-        TextView hint = new TextView(this);
-        hint.setText("点击兵种图标锁定，然后连续点击地图地块添加（再点一次取消）");
-        hint.setTextSize(12);
-        hint.setTextColor(0xFF9ca3af);
-        hint.setPadding(8, 10, 8, 4);
-        target.addView(hint);
-        if (armyAddRows == null) armyAddRows = new java.util.ArrayList<>();
-        if (ArmyConfig.ALL != null) {
-            // 按兵种代码去重（同一代码只是国家变体），列表更清爽、图标一一对应
-            java.util.LinkedHashMap<Integer, ArmyConfig> uniq = new java.util.LinkedHashMap<>();
-            for (ArmyConfig c : ArmyConfig.ALL) {
-                // 只显示 1~40 号兵种，41 及以后不显示
-                if (c != null && c.army >= 1 && (c.army <= 40 || c.elite > 0)
-                        && !uniq.containsKey(c.army)) uniq.put(c.army, c);
-            }
-            for (final ArmyConfig c : uniq.values()) {
-                final LinearLayout row = new LinearLayout(this);
-                row.setOrientation(LinearLayout.HORIZONTAL);
-                row.setGravity(Gravity.CENTER_VERTICAL);
-                row.setPadding(8, 6, 8, 6);
-                row.setClickable(true);
-                Bitmap icon = loadArmyIcon(c.army);
-                if (icon == null) icon = makeArmyIconPlaceholder(c.army);
-                if (icon != null) {
-                    ImageView iv = new ImageView(this);
-                    iv.setImageBitmap(icon);
-                    iv.setLayoutParams(new LinearLayout.LayoutParams(38 * density, 38 * density));
-                    iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
-                    row.addView(iv);
-                }
-                TextView tv = new TextView(this);
-                tv.setText(c.name + "（代码" + c.army + "）\n" + c.summary());
-                tv.setTextSize(13);
-                tv.setTextColor(0xFF374151);
-                tv.setPadding(8, 0, 0, 0);
-                row.addView(tv);
-                row.setTag(c.army);
-                row.setOnClickListener(v -> toggleArmyLock(c, row));
-                armyAddRows.add(row);
-                target.addView(row);
-                View div = new View(this);
-                div.setBackgroundColor(0x22FFFFFF);
-                div.setLayoutParams(new LinearLayout.LayoutParams(-1, 1));
-                target.addView(div);
-            }
-        }
-    }
-
     /** 兵种图标：优先真实图标，缺图时退回红色变体。 */
     private Bitmap loadArmyIcon(int army) {
         Bitmap b = loadBmp("legion/legion_icon_" + army + ".png");
         if (b != null) return b;
         return loadBmp("legion/legion_icon_r_" + army + ".png");
-    }
-
-    /** 无图标的兵种代码：生成带代码数字的彩色占位图标，保证每行都有图标。 */
-    private Bitmap makeArmyIconPlaceholder(int army) {
-        int size = 48;
-        Bitmap bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
-        android.graphics.Canvas c = new android.graphics.Canvas(bmp);
-        int[] colors = {0xFF3B82F6, 0xFF22C55E, 0xFFF59E0B, 0xFFEF4444,
-                0xFF8B5CF6, 0xFF06B6D4, 0xFFF97316, 0xFF84CC16};
-        android.graphics.Paint p = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
-        p.setColor(colors[army % colors.length]);
-        c.drawRoundRect(new android.graphics.RectF(1, 1, size - 1, size - 1), 8, 8, p);
-        p.setColor(0xFFFFFFFF);
-        p.setTextSize(20);
-        p.setTextAlign(android.graphics.Paint.Align.CENTER);
-        p.setFakeBoldText(true);
-        c.drawText(String.valueOf(army), size / 2f, size / 2f + 7, p);
-        return bmp;
     }
 
     /** 右侧面板顶部：直接显示一排兵种图标，点图标锁定，点地图地块连续添加。 */
@@ -5850,37 +5406,6 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
             Object tag = iv.getTag();
             iv.setBackgroundColor(tag instanceof Integer
                     && (Integer) tag == mapData.selectedArmyType ? 0x663b82f6 : 0x00000000);
-        }
-    }
-
-    /** 点选兵种：锁定/取消锁定，锁定后可连续点击地图地块添加多个兵。 */
-    private void toggleArmyLock(final ArmyConfig c, final LinearLayout row) {
-        if (mapData == null || mapData.btlOriginalData == null) {
-            Toast.makeText(this, "请先加载 BTL 地图", Toast.LENGTH_SHORT).show();
-            return;
-        }
-        if (mapData.selectedArmyType == c.army) {
-            mapData.selectedArmyType = -1;
-            highlightArmyRows();
-            Toast.makeText(this, "已取消锁定", Toast.LENGTH_SHORT).show();
-            return;
-        }
-        mapData.selectedArmyType = c.army;
-        highlightArmyRows();
-        closeProvinceEdit();
-        Toast.makeText(this, "已锁定 " + c.name + "，连续点击地图地块添加（再点一次取消）",
-                Toast.LENGTH_LONG).show();
-    }
-
-    /** 高亮当前锁定的兵种行。 */
-    private void highlightArmyRows() {
-        if (armyAddRows == null) return;
-        if (armyAddRows != null) {
-            for (LinearLayout r : armyAddRows) {
-                Object tag = r.getTag();
-                r.setBackgroundColor(tag instanceof Integer
-                        && (Integer) tag == mapData.selectedArmyType ? 0x333b82f6 : 0x00000000);
-            }
         }
     }
 
@@ -7001,13 +6526,6 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
                 ? ("军团" + (leg + 1) + "（" + CountryData.name(mapData.legionCountries[leg]) + "）")
                 : "中立";
         return "\n省区：#" + pv + " · 归属：" + own;
-    }
-
-    private String getBName(int id) {
-        String[] n = {"","农场","风车","小镇","","","","","","","","小城市","中城市","大城市","大都市","首都1","首都2","首都3","首都4","首都5","","炼油厂","大工厂","核电站"};
-        if (id>=0&&id<n.length&&!n[id].isEmpty()) return n[id];
-        if (id==41) return "机场"; if (id==42) return "要塞"; if (id==43) return "堡垒"; if (id==44) return "据点"; if (id==45) return "工厂";
-        return "建筑"+id;
     }
 
     /** 军团序号 -> 显示名（0xFF=中立）。 */
