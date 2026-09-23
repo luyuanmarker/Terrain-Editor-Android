@@ -3584,56 +3584,6 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
     }
 
     /** 收缩地图：四方向去掉边缘若干行/列（与扩展地图对称，内容坐标自动重映射）。 */
-    private void shrinkMapDialog() {
-        if (mapData == null) {
-            Toast.makeText(this, "请先加载地图", Toast.LENGTH_SHORT).show();
-            return;
-        }
-        final int w = mapData.width, h = mapData.height;
-        String[] dirs = {"向上收缩（去掉顶部若干行）", "向下收缩（去掉底部若干行）",
-                "向左收缩（去掉左侧若干列）", "向右收缩（去掉右侧若干列）"};
-        new AlertDialog.Builder(this, R.style.DarkDialog)
-                .setTitle("收缩地图（当前 " + w + "×" + h + "）")
-                .setItems(dirs, (d, which) -> {
-                    final EditText et = new EditText(this);
-                    et.setInputType(InputType.TYPE_CLASS_NUMBER);
-                    et.setText("1");
-                    et.setTextColor(0xFFe5e7eb);
-                    new AlertDialog.Builder(this, R.style.DarkDialog)
-                            .setTitle("输入要收缩的" + (which <= 1 ? "行数" : "列数"))
-                            .setView(et)
-                            .setNegativeButton("取消", null)
-                            .setPositiveButton("确定", (dd, ww) -> {
-                                int n;
-                                try {
-                                    n = Integer.parseInt(et.getText().toString().trim());
-                                } catch (Exception e) {
-                                    n = 0;
-                                }
-                                if (n <= 0) return;
-                                if ((which <= 1 && n >= h) || (which >= 2 && n >= w)) {
-                                    Toast.makeText(this, "收缩数量不能超过或等于当前" + (which <= 1 ? "行数" : "列数"),
-                                            Toast.LENGTH_LONG).show();
-                                    return;
-                                }
-                                try {
-                                    history.clear();
-                                    if (which == 0) FileParser.cropMap(mapData, 0, n, w - 1, h - 1);
-                                    else if (which == 1) FileParser.cropMap(mapData, 0, 0, w - 1, h - 1 - n);
-                                    else if (which == 2) FileParser.cropMap(mapData, n, 0, w - 1, h - 1);
-                                    else FileParser.cropMap(mapData, 0, 0, w - 1 - n, h - 1);
-                                    hexMapView.setMapData(mapData);
-                                    hexMapView.refresh();
-                                    updateInfo();
-                                    Toast.makeText(this, "已收缩为 " + mapData.width + "×" + mapData.height,
-                                            Toast.LENGTH_LONG).show();
-                                } catch (Exception e) {
-                                    Toast.makeText(this, "收缩失败：" + e.getMessage(), Toast.LENGTH_LONG).show();
-                                }
-                            }).show();
-                }).show();
-    }
-
     private void showViewPopup(View anchor) {
         java.util.List<Runnable> acts = new java.util.ArrayList<>();
         acts.add(() -> showDisplaySettingsDialog());
@@ -4834,124 +4784,110 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
     }
 
     // ===== 顶部“扩展”按钮：四个方向 =====
+    /** 扩展地图（完全按枭雄的 WASD 规则）：选方向 → 输距离 → 选填充地形。 */
     private void showExpandDirectionDialog() {
-        if (mapData == null) { Toast.makeText(this, "请先加载地图", Toast.LENGTH_SHORT).show(); return; }
-        AlertDialog.Builder b = new AlertDialog.Builder(this, R.style.DarkDialog);
-        b.setTitle("扩展地图（当前 " + mapData.width + "x" + mapData.height + "）");
-        LinearLayout l = new LinearLayout(this);
-        l.setOrientation(LinearLayout.VERTICAL);
-        l.setPadding(40, 20, 40, 20);
-
-        // 方向单选框
-        final RadioGroup dirGroup = new RadioGroup(this);
-        final String[] dirs = {"向上扩展", "向下扩展", "向左扩展", "向右扩展"};
-        final RadioButton[] dirBtns = new RadioButton[4];
-        for (int i = 0; i < 4; i++) {
-            dirBtns[i] = new RadioButton(this);
-            dirBtns[i].setText(dirs[i]);
-            dirBtns[i].setId(i + 1); // 1=向上 2=向下 3=向左 4=向右
-            if (i == 0) dirBtns[i].setChecked(true);
-            dirGroup.addView(dirBtns[i]);
+        if (mapData == null) {
+            Toast.makeText(this, "请先加载地图", Toast.LENGTH_SHORT).show();
+            return;
         }
-        l.addView(dirGroup);
-
-        final EditText et = new EditText(this);
-        et.setHint("扩展行数（1~50）");
-        et.setInputType(InputType.TYPE_CLASS_NUMBER);
-        et.setText("5");
-        l.addView(et);
-        dirGroup.setOnCheckedChangeListener((g, checkedId) ->
-                et.setHint(checkedId <= 2 ? "扩展行数（1~50）" : "扩展列数（1~50）"));
-
-        // 填充地形下拉选择
-        final Spinner fillSpinner = new Spinner(this);
-        ArrayAdapter<String> fillAdapter = new ArrayAdapter<>(this,
-                android.R.layout.simple_spinner_item,
-                new String[]{"填充海洋", "填充陆地（平原）"});
-        fillAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        fillSpinner.setAdapter(fillAdapter);
-        l.addView(fillSpinner);
-        b.setView(l);
-        b.setPositiveButton("扩展", (d, w) -> {
-            try {
-                int checkedId = dirGroup.getCheckedRadioButtonId();
-                int dir = 0;
-                for (int i = 0; i < 4; i++) if (dirBtns[i].getId() == checkedId) dir = i;
-                int n = Integer.parseInt(et.getText().toString());
-                if (n <= 0 || n > 50) {
-                    Toast.makeText(this, "行/列数范围为 1~50", Toast.LENGTH_SHORT).show();
-                    return;
-                }
-                boolean ifLand = fillSpinner.getSelectedItemPosition() == 1;
-                // 官方地图编辑器：扩展只改 bin，不需要关联任何 BTL
-                performExpand(dir, n, ifLand);
-            } catch (Exception ex) {
-                Toast.makeText(this, "扩展出错: " + ex.getMessage(), Toast.LENGTH_LONG).show();
-            }
-        });
-        b.setNegativeButton("取消", null);
-        showDarkDialog(b, l);
+        final String[] dirs = {"向上扩展（W）", "向下扩展（S）", "向左扩展（A）", "向右扩展（D）"};
+        final String[] codes = {"up", "down", "left", "right"};
+        new AlertDialog.Builder(this, R.style.DarkDialog)
+                .setTitle("扩展地图（当前 " + mapData.width + "×" + mapData.height + "）")
+                .setItems(dirs, (d, which) -> resizeAskDistance(codes[which], true))
+                .setNegativeButton("取消", null)
+                .show();
     }
 
-    /** 执行扩展（尺寸校验 / bin 官方模式或内存模式 / 文件名与提示）。 */
-    private void performExpand(int dir, int n, boolean ifLand) {
+    /** 收缩地图（枭雄 IJKL 规则）：选方向 → 输距离。 */
+    private void shrinkMapDialog() {
+        if (mapData == null) {
+            Toast.makeText(this, "请先加载地图", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        final String[] dirs = {"向上收缩（I）", "向下收缩（K）", "向左收缩（J）", "向右收缩（L）"};
+        final String[] codes = {"up", "down", "left", "right"};
+        new AlertDialog.Builder(this, R.style.DarkDialog)
+                .setTitle("收缩地图（当前 " + mapData.width + "×" + mapData.height + "）")
+                .setItems(dirs, (d, which) -> resizeAskDistance(codes[which], false))
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    /** 输入距离（行数/列数），扩展时继续让用户选填充地形。 */
+    private void resizeAskDistance(final String dir, final boolean expand) {
+        final boolean vertical = dir.equals("up") || dir.equals("down");
+        final EditText et = new EditText(this);
+        et.setInputType(InputType.TYPE_CLASS_NUMBER);
+        et.setText("1");
+        et.setTextColor(0xFFe5e7eb);
+        new AlertDialog.Builder(this, R.style.DarkDialog)
+                .setTitle("请输入要" + (expand ? "扩展" : "收缩") + "的" + (vertical ? "行数" : "列数"))
+                .setView(et)
+                .setNegativeButton("取消", null)
+                .setPositiveButton("确定", (d, w) -> {
+                    int n;
+                    try {
+                        n = Integer.parseInt(et.getText().toString().trim());
+                    } catch (Exception e) {
+                        n = 0;
+                    }
+                    if (n <= 0) {
+                        Toast.makeText(this, "数量必须是正整数", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    if (expand) resizePickFillTerrain(dir, n);
+                    else doResizeMap(dir, n, false, 1, 0);
+                }).show();
+    }
+
+    /** 扩展时选填充地形：一级选地形组，二级选装饰变体（默认海洋 1/0，与枭雄一致）。 */
+    private void resizePickFillTerrain(final String dir, final int n) {
+        final String[] names = new String[32];
+        for (int g = 0; g < 32; g++) names[g] = g + "　" + com.xckeji.bj.model.TerrainColors.getName(g);
+        new AlertDialog.Builder(this, R.style.DarkDialog)
+                .setTitle("选择填充地形（新增地块用什么）")
+                .setItems(names, (d, group) -> {
+                    final int variants = 9;
+                    String[] vs = new String[variants];
+                    for (int i = 0; i < variants; i++) vs[i] = "装饰变体 " + (i + 1);
+                    new AlertDialog.Builder(this, R.style.DarkDialog)
+                            .setTitle("地形组 " + group + "　选择装饰变体")
+                            .setItems(vs, (dd, vv) -> doResizeMap(dir, n, true, group, vv + 1))
+                            .setNegativeButton("取消", null)
+                            .show();
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void doResizeMap(String dir, int n, boolean expand, int fillGid, int fillTid) {
         try {
-            if (mapData == null) {
-                Toast.makeText(this, "请先加载地图", Toast.LENGTH_SHORT).show();
-                return;
-            }
             int oldW = mapData.width, oldH = mapData.height;
-            boolean rows = dir <= 1;
-            int newW = oldW + (rows ? 0 : n);
-            int newH = oldH + (rows ? n : 0);
-            if (newW > 200 || newH > 200) {
-                Toast.makeText(this, "地图最大 200x200", Toast.LENGTH_SHORT).show();
-                return;
-            }
-            history.save(mapData);
-            java.util.function.IntUnaryOperator remap;
-            switch (dir) {
-                case 0: remap = idx -> idx + n * oldW; break;                                   // 向上
-                case 1: remap = idx -> idx; break;                                              // 向下：索引不变
-                case 2: remap = idx -> (idx / oldW) * newW + n + (idx % oldW); break;           // 向左
-                default: remap = idx -> (idx / oldW) * newW + (idx % oldW); break;              // 向右
-            }
-            TerrainTile fill = ifLand ? makeFillTile(false) : makeFillTile(true);
-            if (mapData.binOriginalData != null) {
-                // 征服地图：官方逻辑扩展世界底图 + 坐标重映射 + 海岸线
-                FileParser.extendConquest(mapData, dir, n, ifLand);
-                history.clear(); // 视图已切换为整张世界地图，旧撤销栈尺寸不匹配
-            } else {
-                expandMapGeneric(mapData, newW, newH, remap, fill);
-            }
+            history.save(mapData, expand ? "扩展地图" : "收缩地图");
+            FileParser.resizeMap(mapData, dir, n, expand, fillGid, fillTid);
             hexMapView.setMapData(mapData);
             hexMapView.refresh();
             updateInfo();
-            final String[] names = {"向上", "向下", "向左", "向右"};
-            if (mapData.conquestExtended) {
-                // 官方模式：输出文件就是世界底图本身
-                currentFileName = (mapData.binFileName != null && !mapData.binFileName.isEmpty())
-                        ? mapData.binFileName : "world.bin";
-            } else {
-                currentFileName = names[dir] + "扩展" + n + (rows ? "行" : "列") + "_"
-                        + newW + "x" + newH + ".btl";
-            }
-            String extra = mapData.binOriginalData != null
-                    ? (mapData.btlOriginalData != null
-                        ? "（已同步 BTL 坐标，保存时 bin + btl 一起输出）"
-                        : "（仅扩展世界底图，保存时只输出 world.bin）") : "";
-            Toast.makeText(this, "已" + names[dir] + "扩展 " + n + (rows ? " 行" : " 列") + extra,
+            updateBtnState();
+            rebuildRightPanelIfAny();
+            Toast.makeText(this, "地图尺寸已调整\n" + oldW + "×" + oldH + " → "
+                    + mapData.width + "×" + mapData.height + "\n地块 " + (mapData.width * mapData.height),
                     Toast.LENGTH_LONG).show();
-        } catch (Exception ex) {
-            Toast.makeText(this, "扩展出错: " + ex.getMessage(), Toast.LENGTH_LONG).show();
+        } catch (Exception e) {
+            Toast.makeText(this, e.getMessage(), Toast.LENGTH_LONG).show();
         }
     }
 
-    /**
-     * 通用地图扩展引擎：把地图改为 newW×newH，remap 将旧格索引映射到新格索引。
-     * 未被旧格占用的新格填海洋（省规划 0、归属 FF）；建筑及之后所有含地块索引的
-     * 业务段按同一 remap 重映射；头部宽高与 0x58 地块总数同步更新。
-     */
+    /** 兼容旧调用：右侧面板刷新（存在才做）。 */
+    private void rebuildRightPanelIfAny() {
+        try {
+            if (rightPanel != null) refreshProvinceEditUi();
+        } catch (Exception ignored) {
+        }
+    }
+
+
     private void expandMapGeneric(MapData mapData, int newW, int newH,
                                   java.util.function.IntUnaryOperator remap, TerrainTile fillTile) {
         if (mapData.binOriginalData != null) {
