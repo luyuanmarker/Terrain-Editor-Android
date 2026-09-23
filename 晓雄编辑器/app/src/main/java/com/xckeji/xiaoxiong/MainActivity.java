@@ -685,7 +685,9 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         bar.setGravity(Gravity.CENTER_VERTICAL);
         bar.setPadding(dp(6), dp(3), dp(6), dp(3));
         String[] keys = {"✏️地形刷(R)", "🏠放建筑(B)", "🎖️放兵种(G)", "🈯取省(C)",
-                "🖌️刷省(V)", "↩️撤销(Z)", "🗑️清除按键", "🏳️国家配置"};
+                "🖌️刷省(V)", "↩️撤销(Z)", "🗑️清除按键", "🏳️国家配置",
+                "⬆️扩展W", "⬇️扩展S", "⬅️扩展A", "➡️扩展D",
+                "⬆️收缩I", "⬇️收缩K", "⬅️收缩J", "➡️收缩L"};
         for (String k : keys) {
             Button b = new Button(this);
             b.setText(k);
@@ -712,6 +714,15 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         }
         if (key.contains("国家配置")) {
             showNationConfigDialog();
+            return;
+        }
+        // 扩展 / 收缩：完全按枭雄（WASD 扩展 · IJKL 收缩，扩展时要选填充地形）
+        if (key.contains("扩展") || key.contains("收缩")) {
+            final boolean expand = key.contains("扩展");
+            String dir = key.endsWith("W") || key.endsWith("I") ? "up"
+                    : key.endsWith("S") || key.endsWith("K") ? "down"
+                    : key.endsWith("A") || key.endsWith("J") ? "left" : "right";
+            startResize(dir, expand);
             return;
         }
         if (key.contains("撤销")) {
@@ -780,6 +791,79 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
             }
             keyAction = 5;
             Toast.makeText(this, "刷省：点/拖地图把格子划入省区 #" + keyProvince, Toast.LENGTH_LONG).show();
+        }
+    }
+
+    /** 枭雄流程：先输入距离 → 扩展时选填充地形 → 执行。 */
+    private void startResize(final String dir, final boolean expand) {
+        if (mapData == null || mapData.btlOriginalData == null) {
+            Toast.makeText(this, "请先打开 BTL", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        boolean vertical = dir.equals("up") || dir.equals("down");
+        final EditText et = new EditText(this);
+        et.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        et.setText("1");
+        et.setTextColor(0xFFe5e7eb);
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("请输入要" + (expand ? "扩展" : "收缩") + "的"
+                        + (vertical ? "行数" : "列数") + "（当前 " + mapData.width + "×" + mapData.height + "）")
+                .setView(et)
+                .setNegativeButton("取消", null)
+                .setPositiveButton("确定", (d, w) -> {
+                    int n;
+                    try {
+                        n = Integer.parseInt(et.getText().toString().trim());
+                    } catch (Exception e) {
+                        n = 0;
+                    }
+                    if (n <= 0) {
+                        Toast.makeText(this, "数量必须是正整数", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    if (expand) pickFillTerrain(dir, n);
+                    else doResize(dir, n, false, 1, 0);
+                }).show();
+    }
+
+    /** 扩展时选填充地形：一级选地形类型，二级选装饰变体（默认海洋 1/0）。 */
+    private void pickFillTerrain(final String dir, final int n) {
+        final String[] names = new String[32];
+        for (int g = 0; g < 32; g++) {
+            names[g] = g + "　" + com.xckeji.xiaoxiong.model.TerrainColors.getName(g);
+        }
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("选择填充地形（新增地块用什么）")
+                .setItems(names, (d, group) -> pickDecoration(dir, n, group))
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void pickDecoration(final String dir, final int n, final int group) {
+        final int variants = 9;   // 装饰变体 1..9（与图集一致）
+        final String[] names = new String[variants];
+        for (int i = 0; i < variants; i++) names[i] = "装饰变体 " + (i + 1);
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("地形组 " + group + "　选择装饰变体")
+                .setItems(names, (d, w) -> doResize(dir, n, true, group, w + 1))
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void doResize(String dir, int n, boolean expand, int fillGid, int fillTid) {
+        try {
+            int oldW = mapData.width, oldH = mapData.height;
+            FileParser.resizeMap(mapData, dir, n, expand, fillGid, fillTid);
+            hexMapView.setMapData(mapData);
+            hexMapView.refresh();
+            updateStatus();
+            rebuildPanel();
+            int newTotal = mapData.width * mapData.height;
+            Toast.makeText(this, "地图尺寸已调整\n" + oldW + "×" + oldH + " → "
+                            + mapData.width + "×" + mapData.height + "\n地块 " + newTotal,
+                    Toast.LENGTH_LONG).show();
+        } catch (Exception e) {
+            Toast.makeText(this, e.getMessage(), Toast.LENGTH_LONG).show();
         }
     }
 

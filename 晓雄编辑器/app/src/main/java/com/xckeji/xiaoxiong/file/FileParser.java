@@ -595,6 +595,293 @@ public class FileParser {
         return result;
     }
 
+    /** 新旧格映射（完全按枭雄/熊的 WASD/IJKL 规则）。 */
+    private static void fillMapping(int[] map, String dir, int n, int cols, int rows,
+                                    int newCols, int newRows, boolean expand) {
+        for (int row = 0; row < rows; row++) {
+            for (int col = 0; col < cols; col++) {
+                int old = row * cols + col;
+                int nr = row, nc = col;
+                if (dir.equals("up")) nr = expand ? row + n : row - n;
+                else if (dir.equals("down")) {
+                    if (!expand && row >= rows - n) continue;
+                } else if (dir.equals("left")) nc = expand ? col + n : col - n;
+                else if (dir.equals("right")) {
+                    if (!expand && col >= cols - n) continue;
+                }
+                if (nr < 0 || nr >= newRows || nc < 0 || nc >= newCols) continue;
+                map[nr * newCols + nc] = old;
+            }
+        }
+    }
+
+    /** 新格子填充地形：按枭雄模板（装饰写 63/255 = 无装饰）。 */
+    private static TerrainTile makeFillTile(int gid, int tid) {
+        byte[] raw = new byte[16];
+        raw[0] = (byte) (gid & 0xFF);
+        raw[1] = (byte) (tid & 0xFF);
+        raw[4] = 63; raw[5] = (byte) 0xFF;
+        raw[8] = 63; raw[9] = (byte) 0xFF;
+        TerrainTile t = new TerrainTile();
+        t.parseFromBytes(raw, 0);
+        return t;
+    }
+
+    private static void writeCoord(byte[] raw, int off, int coord) {
+        if (raw == null || off + 2 > raw.length) return;
+        raw[off] = (byte) (coord & 0xFF);
+        raw[off + 1] = (byte) ((coord >>> 8) & 0xFF);
+    }
+
+    /**
+     * 地图扩展/收缩（完全按枭雄/熊的 WASD/IJKL 规则）：
+     * 重建索引映射、新格子填「选择的地形」、省规划与归属重映射、
+     * 建筑/兵种/陷阱/援军/空袭/首都/放置坐标全部改写、头部尺寸更新；
+     * 征服（截取）地图只改截取窗口，超出底图直接拒绝。
+     */
+    public static void resizeMap(MapData m, String dir, int n, boolean expand,
+                                 int fillGid, int fillTid) throws IOException {
+        if (m == null || m.btlOriginalData == null) throw new IOException("请先加载 BTL");
+        if (n <= 0) throw new IOException("数量必须大于 0");
+        BtlHeaderInfo h = parseBTLHeader(m.btlOriginalData);
+        int cols = m.width, rows = m.height;
+        int newCols = cols, newRows = rows;
+        boolean vertical = dir.equals("up") || dir.equals("down");
+        if (vertical) newRows = expand ? rows + n : rows - n;
+        else newCols = expand ? cols + n : cols - n;
+        if (newCols < 1 || newRows < 1) throw new IOException("收缩数量超过当前尺寸");
+        if (!expand && n >= (vertical ? rows : cols)) {
+            throw new IOException("收缩数量不能超过或等于当前" + (vertical ? "行数" : "列数"));
+        }
+        int newTotal = newCols * newRows;
+        int[] map = new int[newTotal];
+        java.util.Arrays.fill(map, -1);
+        fillMapping(map, dir, n, cols, rows, newCols, newRows, expand);
+        int[] oldToNew = new int[cols * rows];
+        java.util.Arrays.fill(oldToNew, -1);
+        for (int i = 0; i < newTotal; i++) if (map[i] >= 0) oldToNew[map[i]] = i;
+
+        if (!h.independentTerrain) {
+            resizeSubmap(m, h, newCols, newRows, newTotal, map, oldToNew, cols, n, dir, expand);
+            return;
+        }
+
+        java.util.List<TerrainTile> newTiles = new java.util.ArrayList<>(newTotal);
+        int[] newProv = new int[newTotal];
+        byte[] newBelong = new byte[newTotal];
+        for (int i = 0; i < newTotal; i++) {
+            int old = map[i];
+            if (old >= 0 && old < m.tiles.size()) {
+                newTiles.add(m.tiles.get(old));
+                int pv = (m.provinces != null && old < m.provinces.length) ? m.provinces[old] : 0xFFFF;
+                if (pv == 0xFFFF || pv == 0) newProv[i] = pv;
+                else if (pv == old) newProv[i] = i;
+                else newProv[i] = (pv < oldToNew.length && oldToNew[pv] >= 0) ? oldToNew[pv] : i;
+                newBelong[i] = (m.belongs != null && old < m.belongs.length) ? m.belongs[old] : (byte) 0xFF;
+            } else {
+                newTiles.add(makeFillTile(fillGid, fillTid));
+                newProv[i] = i;
+                newBelong[i] = (byte) 0xFF;
+            }
+        }
+        byte[] rebuilt = rebuildBtl(m, h, newTiles, newProv, newBelong, oldToNew,
+                newCols, newRows, newTotal, true);
+        replaceWith(m, rebuilt);
+    }
+
+    /** 重建整份 BTL（战役：地形内嵌；内容坐标按映射重排）。 */
+    private static byte[] rebuildBtl(MapData m, BtlHeaderInfo h,
+                                     java.util.List<TerrainTile> newTiles, int[] newProv,
+                                     byte[] newBelong, int[] oldToNew,
+                                     int newW, int newH, int newTotal, boolean remapCoord) {
+        byte[] src = m.btlOriginalData;
+        int armyRec = armyRecSize(h.version);
+        int reinfRec = h.version == 1 ? 80 : 104;
+        computeTailStarts(m, h);
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        byte[] header = new byte[128];
+        System.arraycopy(src, 0, header, 0, 128);
+        put32(header, 0x10, newW);
+        put32(header, 0x14, newH);
+        put32(header, 0x58, newTotal);
+        out.write(header, 0, 128);
+        out.write(src, 128, h.legionCount * 300);
+        if (h.independentTerrain) {
+            byte[] buf = new byte[newTotal * 16];
+            for (int i = 0; i < newTotal; i++) newTiles.get(i).toBytes(buf, i * 16);
+            out.write(buf, 0, buf.length);
+        }
+        byte[] prov = new byte[newTotal * 2];
+        for (int i = 0; i < newTotal; i++) {
+            prov[i * 2] = (byte) (newProv[i] & 0xFF);
+            prov[i * 2 + 1] = (byte) ((newProv[i] >>> 8) & 0xFF);
+        }
+        out.write(prov, 0, prov.length);
+        out.write(newBelong, 0, newBelong.length);
+        // 建筑段
+        for (int i = 0; i < h.buildingCount; i++) {
+            int addr = h.buildingStart + i * 32;
+            if (addr + 32 > src.length) break;
+            byte[] rec = new byte[32];
+            System.arraycopy(src, addr, rec, 0, 32);
+            if (!remapCoord) { out.write(rec, 0, 32); continue; }
+            int coord = le16(rec, 0) - m.coordBase;
+            int nw = (coord >= 0 && coord < oldToNew.length) ? oldToNew[coord] : -1;
+            if (nw < 0) continue;
+            writeCoord(rec, 0, nw + m.coordBase);
+            out.write(rec, 0, 32);
+        }
+        // 兵种段
+        int armyStart = h.buildingStart + h.buildingCount * 32;
+        for (int i = 0; i < h.armyCount; i++) {
+            int addr = armyStart + i * armyRec;
+            if (addr + armyRec > src.length) break;
+            byte[] rec = new byte[armyRec];
+            System.arraycopy(src, addr, rec, 0, armyRec);
+            if (remapCoord) {
+                int coord = le16(rec, 0) - m.coordBase;
+                int nw = (coord >= 0 && coord < oldToNew.length) ? oldToNew[coord] : -1;
+                if (nw < 0) continue;
+                writeCoord(rec, 0, nw + m.coordBase);
+            }
+            out.write(rec, 0, armyRec);
+        }
+        // 陷阱段
+        int mineStart = armyStart + h.armyCount * armyRec;
+        for (int i = 0; i < h.mineCount; i++) {
+            int addr = mineStart + i * 12;
+            if (addr + 12 > src.length) break;
+            byte[] rec = new byte[12];
+            System.arraycopy(src, addr, rec, 0, 12);
+            if (remapCoord) {
+                int coord = le16(rec, 0) - m.coordBase;
+                int nw = (coord >= 0 && coord < oldToNew.length) ? oldToNew[coord] : -1;
+                if (nw < 0) continue;
+                writeCoord(rec, 0, nw + m.coordBase);
+            }
+            out.write(rec, 0, 12);
+        }
+        // 方案 + 天气 + 事件：原样
+        int planStart = mineStart + h.mineCount * 12;
+        int eventEnd = m.eventStart + h.eventCount * 44;
+        if (planStart < src.length) {
+            out.write(src, planStart, Math.min(eventEnd, src.length) - planStart);
+        }
+        // 尾段
+        copyWithCoord(out, src, m.reinforceStart, h.reinforceCount, reinfRec, 0, 2,
+                oldToNew, m.coordBase, remapCoord);
+        copyWithCoord(out, src, m.airstrikeStart, h.airstrikeCount, 20, 0, 4,
+                oldToNew, m.coordBase, remapCoord);
+        copyWithCoord(out, src, m.placementAStart, h.placementCountA, 8, 0, 4,
+                oldToNew, m.coordBase, remapCoord);
+        copyWithCoord(out, src, m.placementBStart, h.placementCountB, 8, 0, 4,
+                oldToNew, m.coordBase, remapCoord);
+        copyWithCoord(out, src, m.strategyStart, h.strategyCount, 16, -1, 0,
+                oldToNew, m.coordBase, false);
+        copyWithCoord(out, src, m.airSupportStart, h.airSupportCount, 16, -1, 0,
+                oldToNew, m.coordBase, false);
+        copyWithCoord(out, src, m.capitalStart, h.capitalCount, 4, 0, 4,
+                oldToNew, m.coordBase, remapCoord);
+        int tailStart = m.capitalStart + h.capitalCount * 4;
+        if (tailStart < src.length) out.write(src, tailStart, src.length - tailStart);
+        return out.toByteArray();
+    }
+
+    /** 复制一段记录，可选对地块索引字段重映射。 */
+    private static void copyWithCoord(java.io.ByteArrayOutputStream out, byte[] src, int start,
+                                      int count, int size, int coordOff, int coordBytes,
+                                      int[] oldToNew, int coordBase, boolean remap) {
+        for (int i = 0; i < count; i++) {
+            int addr = start + i * size;
+            if (addr < 0 || addr + size > src.length) break;
+            byte[] rec = new byte[size];
+            System.arraycopy(src, addr, rec, 0, size);
+            if (remap && coordOff >= 0) {
+                int coord = (coordBytes == 2 ? le16(rec, coordOff) : le32(rec, coordOff)) - coordBase;
+                int nw = (coord >= 0 && coord < oldToNew.length) ? oldToNew[coord] : -1;
+                if (nw < 0) continue;
+                if (coordBytes == 2) writeCoord(rec, coordOff, nw + coordBase);
+                else put32(rec, coordOff, nw + coordBase);
+            }
+            out.write(rec, 0, size);
+        }
+    }
+
+    /** 征服（截取）地图：只改截取窗口（captureX/Y + 长宽 + 省规划/归属长度），地形与内容坐标不动。 */
+    private static void resizeSubmap(MapData m, BtlHeaderInfo h, int newCols, int newRows,
+                                     int newTotal, int[] map, int[] oldToNew,
+                                     int cols, int n, String dir, boolean expand) throws IOException {
+        int binW = cols, binH = h.height;
+        if (m.binOriginalData != null && m.binOriginalData.length >= 16) {
+            binW = le32(m.binOriginalData, 8);
+            binH = le32(m.binOriginalData, 12);
+        }
+        int capX = h.captureX, capY = h.captureY;
+        if (dir.equals("up")) capY += (expand ? -n : n);
+        if (dir.equals("down")) capY += (expand ? 0 : n);
+        if (dir.equals("left")) capX += (expand ? -n : n);
+        if (dir.equals("right")) capX += (expand ? 0 : n);
+        if (expand && (capX < 0 || capY < 0 || capX + newCols > binW || capY + newRows > binH)) {
+            throw new IOException("❌ 禁止扩展：截取窗口已占满底图（底图 " + binW + "×" + binH + "）");
+        }
+        if (capX < 0) capX = 0;
+        if (capY < 0) capY = 0;
+        int[] newProv = new int[newTotal];
+        byte[] newBelong = new byte[newTotal];
+        java.util.Arrays.fill(newProv, 0xFFFF);
+        java.util.Arrays.fill(newBelong, (byte) 0xFF);
+        for (int i = 0; i < newTotal; i++) {
+            int old = map[i];
+            if (old < 0) continue;
+            if (m.belongs != null && old < m.belongs.length) newBelong[i] = m.belongs[old];
+            if (m.provinces != null && old < m.provinces.length) {
+                int oldWx = old % cols + h.captureX, oldWy = old / cols + h.captureY;
+                newProv[i] = oldWy * newCols + oldWx;   // 世界坐标（新窗口宽度）
+            }
+        }
+        byte[] src = m.btlOriginalData;
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        byte[] header = new byte[128];
+        System.arraycopy(src, 0, header, 0, 128);
+        put32(header, 0x08, capX);
+        put32(header, 0x0C, capY);
+        put32(header, 0x10, newCols);
+        put32(header, 0x14, newRows);
+        put32(header, 0x58, newTotal);
+        out.write(header, 0, 128);
+        out.write(src, 128, h.legionCount * 300);
+        byte[] prov = new byte[newTotal * 2];
+        for (int i = 0; i < newTotal; i++) {
+            prov[i * 2] = (byte) (newProv[i] & 0xFF);
+            prov[i * 2 + 1] = (byte) ((newProv[i] >>> 8) & 0xFF);
+        }
+        out.write(prov, 0, prov.length);
+        out.write(newBelong, 0, newBelong.length);
+        out.write(src, h.buildingStart, src.length - h.buildingStart);   // 内容段原样（世界坐标不变）
+        replaceWith(m, out.toByteArray());
+    }
+
+    /** 用重建后的字节替换 MapData 的全部内容（保持对象引用不变）。 */
+    private static void replaceWith(MapData m, byte[] rebuilt) throws IOException {
+        MapData fresh = loadFile(rebuilt, m.fileName == null ? "resized.btl" : m.fileName);
+        m.btlOriginalData = rebuilt;
+        m.width = fresh.width;
+        m.height = fresh.height;
+        m.tiles = fresh.tiles;
+        m.buildingIds = fresh.buildingIds;
+        m.provinces = fresh.provinces;
+        m.belongs = fresh.belongs;
+        m.armies = fresh.armies;
+        m.buildings = fresh.buildings;
+        m.traps = fresh.traps;
+        m.legions = fresh.legions;
+        m.legionColors = fresh.legionColors;
+        m.legionCountries = fresh.legionCountries;
+        m.coordBase = fresh.coordBase;
+        m.editedCells.clear();
+        computeTailStarts(m, parseBTLHeader(rebuilt));
+    }
+
     /** 解析陷阱段（12 字节/条：0x0 坐标、0x2 军团、0x4 等级、0x6 血量、0x8 保留）。 */
     private static void parseTraps(MapData mapData, byte[] data, BtlHeaderInfo header) {
         mapData.traps.clear();
