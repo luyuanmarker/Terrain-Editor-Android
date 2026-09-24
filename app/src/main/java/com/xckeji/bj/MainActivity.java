@@ -3703,27 +3703,17 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
     }
 
     /**
-     * 按导入的底图照片一键生成地形：蓝色系格子 → 海洋，其余 → 陆地（平原）。
-     * 逐格取的是六边形中心的颜色（导入底图时已经采样好），所以照片不需要和地图格数一致。
+     * 按图生成地形：点一下直接弹选照片，选完立刻生成。
+     * 规则：蓝色系格子 → 海洋（自动补海岸线），其余颜色 → 陆地（平原）。
+     * 逐格取的是六边形中心的颜色，照片不需要和地图格数一致（会自动拉伸铺满）。
      */
     private void generateTerrainFromImage() {
         if (mapData == null) { Toast.makeText(this, "请先加载地图", Toast.LENGTH_SHORT).show(); return; }
-        if (mapData.overlayImage == null) {
-            Toast.makeText(this, "请先在「视图 → 导入底图」里选一张照片", Toast.LENGTH_LONG).show();
-            return;
-        }
-        hexMapView.resampleOverlayColors();   // 地图尺寸变过也能重新按当前尺寸取色
-        new AlertDialog.Builder(this, R.style.DarkDialog)
-                .setTitle("按图生成地形")
-                .setMessage("将按底图照片的颜色刷一遍地形：\n\n"
-                        + "· 蓝色 → 海洋（自动补海岸线）\n"
-                        + "· 其他颜色（紫色等）→ 陆地（平原）\n\n"
-                        + "当前地图 " + mapData.width + "×" + mapData.height
-                        + "（" + (mapData.width * mapData.height) + " 格）。\n"
-                        + "生成后可以用撤销或笔刷局部修改。")
-                .setNegativeButton("取消", null)
-                .setPositiveButton("生成", (d, w) -> applyTerrainFromImageColors())
-                .show();
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("image/*");
+        startActivityForResult(intent, REQUEST_TERRAIN_IMAGE);
+        Toast.makeText(this, "选一张照片：蓝色 → 海洋，其余 → 陆地（平原）", Toast.LENGTH_SHORT).show();
     }
 
     private void applyTerrainFromImageColors() {
@@ -5004,6 +4994,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
 
     private static final int REQUEST_OVERLAY = 300;
     private static final int REQUEST_GUIDE = 301;
+    private static final int REQUEST_TERRAIN_IMAGE = 302;
     private static final int REQUEST_CONQUEST_BIN = 302;
     private static final int REQUEST_MAPLIB_UPLOAD = 306;
     private static final String MAPLIB_BASE = "https://dx.xckeji.xyz/map_library";
@@ -7600,6 +7591,23 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
                 }
             } catch (Exception e) {
                 Toast.makeText(this, "底图加载失败: " + e.getMessage(), Toast.LENGTH_LONG).show();
+            }
+        } else if (req == REQUEST_TERRAIN_IMAGE && res == RESULT_OK && data != null && data.getData() != null) {
+            try {
+                Uri uri = data.getData();
+                InputStream is = getContentResolver().openInputStream(uri);
+                Bitmap bmp = BitmapFactory.decodeStream(is);
+                if (is != null) is.close();
+                if (bmp != null) {
+                    // 用原图（不做对比度增强），保证取色就是照片真实颜色
+                    hexMapView.setOverlayImage(bmp);
+                    hexMapView.refresh();
+                    applyTerrainFromImageColors();
+                } else {
+                    Toast.makeText(this, "照片读取失败", Toast.LENGTH_SHORT).show();
+                }
+            } catch (Exception e) {
+                Toast.makeText(this, "按图生成失败: " + e.getMessage(), Toast.LENGTH_LONG).show();
             }
         } else if (req == REQUEST_GUIDE && res == RESULT_OK && data != null && data.getData() != null) {
             try {

@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>按图生成地形 · WC4 地形编辑器</title>
+<style>
+  :root{--bg:#14141a;--panel:#1e1e24;--border:#3b3b46;--text:#e5e7eb;--sub:#9ca3af;
+        --blue:#3b82f6;--purple:#8b5cf6;--green:#22c55e;--sea:#1e5fa8;}
+  *{box-sizing:border-box}
+  body{margin:0;padding:18px;background:linear-gradient(160deg,#14141a,#1b1b2b 60%,#14141a);
+       color:var(--text);font:14px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;}
+  h1{font-size:20px;margin:0 0 4px}
+  .sub{color:var(--sub);font-size:12px;margin-bottom:16px}
+  .wrap{display:grid;grid-template-columns:340px 1fr;gap:16px;max-width:1400px;margin:0 auto}
+  @media(max-width:900px){.wrap{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:14px}
+  .card h2{font-size:14px;margin:0 0 10px;color:#c7d2fe;font-weight:600}
+  label{display:block;font-size:12px;color:var(--sub);margin:10px 0 4px}
+  input[type=text],input[type=number],select{width:100%;padding:8px;background:#15151b;color:var(--text);
+       border:1px solid var(--border);border-radius:8px;font-size:13px}
+  input[type=file]{width:100%;font-size:12px;color:var(--sub)}
+  button{width:100%;padding:11px;margin-top:10px;border:0;border-radius:10px;font-size:14px;
+       color:#fff;cursor:pointer;background:linear-gradient(90deg,var(--blue),var(--purple));font-weight:600}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  button.ghost{background:#2a2a5e;font-weight:400}
+  .row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .hint{font-size:12px;color:var(--sub);margin-top:8px}
+  .stats{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;font-size:12px}
+  .chip{padding:5px 10px;border-radius:20px;background:#15151b;border:1px solid var(--border)}
+  .chip b{color:#fff}
+  #canvasWrap{position:relative;background:#0d0d12;border:1px solid var(--border);border-radius:12px;
+       overflow:hidden;min-height:320px;display:flex;align-items:center;justify-content:center}
+  canvas{max-width:100%;display:block}
+  .rules{font-size:12px;color:var(--sub)}
+  .rules b{color:#e5e7eb}
+  .tag{display:inline-block;padding:2px 8px;border-radius:6px;background:#1e5fa8;color:#fff;font-size:11px}
+  .tag.land{background:#2f7d4f}
+</style>
+</head>
+<body>
+<h1>按图生成地形</h1>
+<div class="sub">上传一张地图照片（示意图），蓝色部分当作海洋，其余颜色当作陆地（平原），一键生成可放回游戏的 .btl 文件。同一套规则与「Terrain Editor 正式版」App 保持一致。</div>
+
+<div class="wrap">
+  <div>
+    <div class="card">
+      <h2>1. 选择照片</h2>
+      <input type="file" id="photo" accept="image/*">
+      <div class="hint">照片不用和地图格数一致，会自动拉伸铺满整幅地图；逐格取的是六边形中心的颜色。</div>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <h2>2. 地图来源</h2>
+      <label>模板 .btl（推荐：只替换地形，军团/建筑/兵种/省区等内容全部保留）</label>
+      <input type="file" id="template" accept=".btl,.BTL,application/octet-stream">
+      <div class="hint">建议用游戏 <b>bin/</b> 里的空白关卡文件（例如 stage10001.btl）做模板。</div>
+      <label>没有模板？直接指定尺寸，生成一张标准空白战役</label>
+      <div class="row">
+        <input type="number" id="mapW" value="24" min="3" max="200" placeholder="宽 3-200">
+        <input type="number" id="mapH" value="24" min="3" max="200" placeholder="高 3-200">
+      </div>
+      <div class="hint">指定尺寸时，只写「主数据 + 军团 + 地形 + 省规划 + 归属」基础段，不包含任何城市/兵种/事件。</div>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <h2>3. 生成</h2>
+      <button id="gen" disabled>生成地形</button>
+      <button id="dl" class="ghost" disabled>下载 .btl</button>
+      <div class="stats" id="stats"></div>
+      <div class="hint">生成后可下载文件，直接放进游戏 bin/ 目录；不满意重新生成即可。</div>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <h2>规则</h2>
+      <div class="rules">
+        <span class="tag">蓝色</span> 色相 180°~256° 且有饱和度 → <b>海洋</b>（地形组 1 / 编号 0）<br>
+        <span class="tag land">其他颜色</span> 紫、白、灰、黑、绿、红… → <b>陆地（平原）</b>（地形组 0 / 编号 255）<br><br>
+        海洋格自动按官方算法补海岸线波浪（装饰组 31），并把省规划写成 65535（游戏硬要求）；陆地格清掉残留波浪。
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <div class="card" style="margin-bottom:14px">
+      <h2>预览</h2>
+      <div id="canvasWrap"><canvas id="cv" width="900" height="520"></canvas></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ===== 官方海岸线查表（MapEdit getBorderId 的 64 项，index = t1*32+t2*16+t3*8+t4*4+t5*2+t6）=====
+const COAST_BORDER = [
+  1,5,9,13,17,21,25,29,   3,7,11,15,19,23,27,31,
+  2,6,10,14,18,22,26,30,  4,8,12,16,20,24,28,32,
+  33,37,41,45,49,53,57,61, 35,39,43,47,51,55,59,63,
+  34,38,42,46,50,54,58,62, 36,40,44,48,52,56,60,0
+];
+const OCEAN_GROUP = 1, OCEAN_ID = 0;      // 海洋
+const LAND_GROUP  = 0, LAND_ID  = 255;    // 陆地（平原）
+const EMPTY_DOODAD_GROUP = 0x3F, EMPTY_DOODAD_ID = 0xFF;
+const COAST_DOODAD_GROUP = 31;            // 波浪装饰组
+
+let photoImg = null;        // 照片
+let templateBytes = null;   // 模板 btl 原始字节
+let resultBytes = null;     // 生成结果
+let oceanFlags = null, mapW = 0, mapH = 0;
+
+const $ = (id) => document.getElementById(id);
+const photoInput = $('photo'), tplInput = $('template');
+const genBtn = $('gen'), dlBtn = $('dl'), stats = $('stats'), cv = $('cv'), ctx = cv.getContext('2d');
+
+// ---------- 工具 ----------
+function u32(dv, off) { return dv.getUint32(off, true); }
+function view(bytes) { return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength); }
+
+/** 是否“海洋蓝”：色相 180~256、有饱和度、不是黑白灰（紫色 ≈270° 算陆地） */
+function isOceanColor(r, g, b) {
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  const v = max, diff = max - min;
+  if (v < 50) return false;                          // 近黑 → 陆地
+  if (Math.floor(diff * 100 / Math.max(1, v)) < 18) return false; // 灰/白/黑 → 陆地
+  let h;
+  if (max === r) h = 60 * (((g - b) / diff) % 6);
+  else if (max === g) h = 60 * ((b - r) / diff + 2);
+  else h = 60 * ((r - g) / diff + 4);
+  if (h < 0) h += 360;
+  return h >= 180 && h <= 256;
+}
+
+/** 截图缩放后按六边形中心取色，得到每格是否海洋 */
+function sampleFromPhoto(img, w, h) {
+  const c = document.createElement('canvas');
+  // 采样分辨率够用就行，避免大图卡顿
+  const sw = Math.min(img.naturalWidth, 1600), sh = Math.max(1, Math.round(img.naturalHeight * sw / img.naturalWidth));
+  c.width = sw; c.height = sh;
+  const cc = c.getContext('2d');
+  cc.drawImage(img, 0, 0, sw, sh);
+  const px = cc.getImageData(0, 0, sw, sh).data;
+
+  // 与 App 一致：先算六边形网格的包围盒，再把照片按比例映射进去
+  const s = 20;
+  const minX = -s, minY = -s;
+  const maxX = s * 1.5 * (w - 1) + s, maxY = s * Math.sqrt(3) * (h - 0.5) + s;
+  const ow = maxX - minX, oh = maxY - minY;
+  const flags = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const cx = s * 1.5 * x, cy = s * Math.sqrt(3) * (y + (x % 2 === 0 ? 0 : 0.5));
+      const ix = Math.max(0, Math.min(sw - 1, Math.floor((cx - minX) / ow * sw)));
+      const iy = Math.max(0, Math.min(sh - 1, Math.floor((cy - minY) / oh * sh)));
+      const o = (iy * sw + ix) * 4;
+      flags[y * w + x] = isOceanColor(px[o], px[o + 1], px[o + 2]) ? 1 : 0;
+    }
+  }
+  return flags;
+}
+
+/** 官方规则：奇偶列两套邻居偏移；越界或索引 0 不算邻居（与官方代码一致） */
+function neighborIndex(id, direct, w, total) {
+  const x = id % w;
+  let t;
+  if (x & 1) {
+    t = direct === 1 ? id - 1 : direct === 2 ? id - w : direct === 3 ? id + 1
+      : direct === 4 ? id + w - 1 : direct === 5 ? id + w : id + w + 1;
+  } else {
+    t = direct === 1 ? id - w - 1 : direct === 2 ? id - w : direct === 3 ? id - w + 1
+      : direct === 4 ? id - 1 : direct === 5 ? id + w : id + 1;
+  }
+  return (t > 0 && t < total) ? t : -1;
+}
+
+/** 海洋格按六邻居掩码取波浪编号 */
+function coastVariant(id, flags, w, total) {
+  let bits = 0;
+  for (let d = 1; d <= 6; d++) {
+    const nb = neighborIndex(id, d, w, total);
+    if (nb >= 0 && flags[nb] === 1) bits |= (1 << (6 - d));
+  }
+  return COAST_BORDER[bits] + 10;
+}
+
+function writeTile(bytes, off, ocean, variant) {
+  bytes[off] = ocean ? OCEAN_GROUP : LAND_GROUP;
+  bytes[off + 1] = ocean ? OCEAN_ID : LAND_ID;
+  bytes[off + 2] = 0; bytes[off + 3] = 0;
+  bytes[off + 4] = ocean ? COAST_DOODAD_GROUP : EMPTY_DOODAD_GROUP;
+  bytes[off + 5] = ocean ? variant : EMPTY_DOODAD_ID;
+  bytes[off + 6] = 0; bytes[off + 7] = 0;
+  bytes[off + 8] = EMPTY_DOODAD_GROUP;
+  bytes[off + 9] = EMPTY_DOODAD_ID;
+  bytes[off + 10] = 0; bytes[off + 11] = 0;
+  bytes[off + 12] = 0; bytes[off + 13] = 0; bytes[off + 14] = 0; bytes[off + 15] = 0;
+}
+
+/** 用模板只替换地形层与海洋格省规划，其它字节原样保留 */
+function buildFromTemplate(tpl, w, h, flags) {
+  const out = new Uint8Array(tpl);            // 完整复制模板
+  const dv = view(out);
+  const legionCount = u32(dv, 0x18);
+  const terrainStart = 128 + legionCount * 300;
+  let sectionTiles = u32(dv, 0x58);           // 官方规则：省规划/归属按头部地块总数
+  const tiles = w * h;
+  if (!(sectionTiles > 0) || sectionTiles > out.length) sectionTiles = tiles;
+  const adminStart = terrainStart + tiles * 16;
+  if (adminStart + sectionTiles * 2 > out.length) throw new Error('模板结构不完整，无法写入地形段');
+
+  for (let i = 0; i < tiles; i++) {
+    const ocean = flags[i] === 1;
+    writeTile(out, terrainStart + i * 16, ocean, ocean ? coastVariant(i, flags, w, tiles) : 0);
+    if (ocean) {                              // 海洋格省规划必须是 65535
+      out[adminStart + i * 2] = 0xFF;
+      out[adminStart + i * 2 + 1] = 0xFF;
+    }
+  }
+  return out;
+}
+
+/** 没有模板：生成标准空白战役（版本1、2 军团、无内容段） */
+function buildNewBtl(w, h, flags) {
+  const tiles = w * h;
+  const legionCount = 2;
+  const terrainStart = 128 + legionCount * 300;
+  const adminStart = terrainStart + tiles * 16;
+  const ownershipStart = adminStart + tiles * 2;
+  const out = new Uint8Array(ownershipStart + tiles);
+  const dv = view(out);
+  const put = (off, v) => dv.setUint32(off, v >>> 0, true);
+
+  put(0x00, 1);          // btl 版本
+  put(0x04, 0);          // 地图序号 0 = 自带地形
+  put(0x08, 0); put(0x0C, 0);
+  put(0x10, w); put(0x14, h);
+  put(0x18, legionCount);
+  put(0x1C, 0); put(0x20, 0); put(0x24, 0); put(0x28, 0); put(0x2C, 0);
+  put(0x30, 1);          // 胜利条件（1 = 全歼）
+  put(0x34, 999); put(0x38, 999);
+  put(0x3C, 0); put(0x40, 0);
+  put(0x54, 1);
+  put(0x58, tiles);      // 地块总数
+
+  // 两个军团槽位（id / 国家），其余为 0
+  put(0x80, 1); put(0x84, 1);
+  put(0x80 + 300, 2); put(0x84 + 300, 3);
+
+  for (let i = 0; i < tiles; i++) {
+    const ocean = flags[i] === 1;
+    writeTile(out, terrainStart + i * 16, ocean, ocean ? coastVariant(i, flags, w, tiles) : 0);
+    const a = adminStart + i * 2;
+    if (ocean) { out[a] = 0xFF; out[a + 1] = 0xFF; } else { out[a] = 0; out[a + 1] = 0; }
+    out[ownershipStart + i] = 0xFF;
+  }
+  return out;
+}
+
+// ---------- 预览 ----------
+function drawPreview(img, w, h, flags) {
+  const pad = 16;
+  const s = Math.max(4, Math.min((cv.width - pad * 2) / (1.5 * w + 0.5),
+                                 (cv.height - pad * 2) / (Math.sqrt(3) * (h + 0.5))));
+  cv.width = Math.round(s * (1.5 * w + 0.5) + pad * 2);
+  cv.height = Math.round(s * Math.sqrt(3) * (h + 0.5) + pad * 2);
+  ctx.fillStyle = '#0d0d12';
+  ctx.fillRect(0, 0, cv.width, cv.height);
+
+  const ox = pad, oy = pad;
+  const cellW = s * 1.5, cellH = s * Math.sqrt(3);
+
+  // 底：照片
+  if (img) {
+    ctx.globalAlpha = 0.85;
+    ctx.drawImage(img, ox + s * 0.5, oy + s * 0.5, cellW * w, cellH * h);
+    ctx.globalAlpha = 1;
+  }
+  // 上：地形六边形
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const cx = ox + s * 1.5 * x + s, cy = oy + cellH * (y + (x % 2 === 0 ? 0 : 0.5)) + s;
+      const ocean = flags[y * w + x] === 1;
+      ctx.beginPath();
+      for (let i = 0; i < 6; i++) {
+        const a = Math.PI / 180 * (60 * i - 30);
+        const px = cx + s * Math.cos(a), py = cy + s * Math.sin(a);
+        i ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
+      }
+      ctx.closePath();
+      ctx.fillStyle = ocean ? 'rgba(30,95,168,0.85)' : 'rgba(40,150,90,0.55)';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+      ctx.lineWidth = 0.6;
+      ctx.stroke();
+    }
+  }
+}
+
+function refresh() {
+  const hasPhoto = !!photoImg;
+  let w = 0, h = 0, ok = false;
+  if (templateBytes) {
+    const dv = view(templateBytes);
+    w = u32(dv, 0x10); h = u32(dv, 0x14);
+    ok = w >= 3 && h >= 3 && w <= 200 && h <= 200;
+  } else {
+    w = parseInt($('mapW').value, 10); h = parseInt($('mapH').value, 10);
+    ok = w >= 3 && h >= 3 && w <= 200 && h <= 200;
+  }
+  genBtn.disabled = !(hasPhoto && ok);
+  dlBtn.disabled = !resultBytes;
+  if (!hasPhoto || !ok) { oceanFlags = null; resultBytes = null; stats.innerHTML = ''; drawPreview(photoImg, 16, 12, new Uint8Array(192)); }
+}
+
+// ---------- 事件 ----------
+photoInput.onchange = (e) => {
+  const f = e.target.files[0]; if (!f) return;
+  const url = URL.createObjectURL(f);
+  const img = new Image();
+  img.onload = () => { photoImg = img; resultBytes = null; refresh(); showStats(null); };
+  img.src = url;
+};
+
+tplInput.onchange = (e) => {
+  const f = e.target.files[0];
+  if (!f) { templateBytes = null; refresh(); return; }
+  const fr = new FileReader();
+  fr.onload = () => {
+    try {
+      const bytes = new Uint8Array(fr.result);
+      const dv = view(bytes);
+      const w = u32(dv, 0x10), h = u32(dv, 0x14), legion = u32(dv, 0x18), mapId = u32(dv, 0x04);
+      if (mapId !== 0) { alert('该文件不是自带地形的战役 BTL（地图序号≠0，是征服/截取地图）。请换一个 stage*.btl 模板。'); templateBytes = null; refresh(); return; }
+      if (bytes.length < 128 + legion * 300 + w * h * 16) { alert('模板结构不完整，无法解析地形段。'); templateBytes = null; refresh(); return; }
+      templateBytes = bytes;
+      $('mapW').value = w; $('mapH').value = h;
+      refresh();
+      alert('已读取模板：' + w + '×' + h + '，军团 ' + legion + ' 个，生成时只替换地形层。');
+    } catch (err) { alert('模板读取失败：' + err.message); templateBytes = null; refresh(); }
+  };
+  fr.readAsArrayBuffer(f);
+};
+
+$('mapW').oninput = $('mapH').oninput = () => { templateBytes = null; tplInput.value = ''; refresh(); };
+
+genBtn.onclick = () => {
+  try {
+    const dv = templateBytes ? view(templateBytes) : null;
+    const w = dv ? u32(dv, 0x10) : parseInt($('mapW').value, 10);
+    const h = dv ? u32(dv, 0x14) : parseInt($('mapH').value, 10);
+    mapW = w; mapH = h;
+    oceanFlags = sampleFromPhoto(photoImg, w, h);
+    resultBytes = templateBytes ? buildFromTemplate(templateBytes, w, h, oceanFlags)
+                                : buildNewBtl(w, h, oceanFlags);
+    drawPreview(photoImg, w, h, oceanFlags);
+    showStats({ w, h });
+    dlBtn.disabled = false;
+  } catch (err) {
+    alert('生成失败：' + err.message);
+  }
+};
+
+function showStats(info) {
+  if (!info || !oceanFlags) { stats.innerHTML = ''; return; }
+  let sea = 0;
+  for (let i = 0; i < oceanFlags.length; i++) if (oceanFlags[i]) sea++;
+  const land = oceanFlags.length - sea;
+  stats.innerHTML =
+    '<div class="chip">地图 <b>' + info.w + '×' + info.h + '</b></div>' +
+    '<div class="chip">海洋 <b>' + sea + '</b> 格</div>' +
+    '<div class="chip">陆地（平原）<b>' + land + '</b> 格</div>' +
+    '<div class="chip">输出 <b>' + (resultBytes ? (resultBytes.length / 1024).toFixed(1) + ' KB' : '-') + '</b></div>';
+}
+
+dlBtn.onclick = () => {
+  if (!resultBytes) return;
+  const blob = new Blob([resultBytes], { type: 'application/octet-stream' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'stage' + mapW + 'x' + mapH + '.btl';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+};
+
+refresh();
+</script>
+</body>
+</html>
