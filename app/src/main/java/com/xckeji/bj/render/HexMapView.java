@@ -987,6 +987,11 @@ public class HexMapView extends View {
         }
     }
 
+    /** 按当前地图尺寸重新从底图采样每格颜色（“按图生成地形”前调用，保证采样是最新的）。 */
+    public void resampleOverlayColors() {
+        sampleColorsFromOverlay();
+    }
+
     private float hs() { return 20f * scale; }
     private float hcx(int q) { return hs() * 1.5f * q + offsetX; }
     private float hcy(int q, int r) { return hs() * (float)Math.sqrt(3) * (r + (q%2==0?0:0.5f)) + offsetY; }

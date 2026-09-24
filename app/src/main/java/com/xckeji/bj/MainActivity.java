@@ -3692,12 +3692,80 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         acts.add(() -> importOverlay());
         acts.add(() -> importGuideImage());
         acts.add(() -> toggleOverlay());
+        acts.add(() -> generateTerrainFromImage());
         showDropdownMenu(anchor, new String[]{
                 "显示设置…",
                 "导入底图",
                 "导入图填",
-                (hexMapView != null && hexMapView.isOverlayVisible() ? "关闭遮罩" : "开启遮罩")
+                (hexMapView != null && hexMapView.isOverlayVisible() ? "关闭遮罩" : "开启遮罩"),
+                "按图生成地形…"
         }, acts);
+    }
+
+    /**
+     * 按导入的底图照片一键生成地形：蓝色系格子 → 海洋，其余 → 陆地（平原）。
+     * 逐格取的是六边形中心的颜色（导入底图时已经采样好），所以照片不需要和地图格数一致。
+     */
+    private void generateTerrainFromImage() {
+        if (mapData == null) { Toast.makeText(this, "请先加载地图", Toast.LENGTH_SHORT).show(); return; }
+        if (mapData.overlayImage == null) {
+            Toast.makeText(this, "请先在「视图 → 导入底图」里选一张照片", Toast.LENGTH_LONG).show();
+            return;
+        }
+        hexMapView.resampleOverlayColors();   // 地图尺寸变过也能重新按当前尺寸取色
+        new AlertDialog.Builder(this, R.style.DarkDialog)
+                .setTitle("按图生成地形")
+                .setMessage("将按底图照片的颜色刷一遍地形：\n\n"
+                        + "· 蓝色 → 海洋（自动补海岸线）\n"
+                        + "· 其他颜色（紫色等）→ 陆地（平原）\n\n"
+                        + "当前地图 " + mapData.width + "×" + mapData.height
+                        + "（" + (mapData.width * mapData.height) + " 格）。\n"
+                        + "生成后可以用撤销或笔刷局部修改。")
+                .setNegativeButton("取消", null)
+                .setPositiveButton("生成", (d, w) -> applyTerrainFromImageColors())
+                .show();
+    }
+
+    private void applyTerrainFromImageColors() {
+        if (mapData == null || mapData.sampledColors == null) return;
+        int total = mapData.width * mapData.height;
+        if (total <= 0 || mapData.tiles == null || mapData.tiles.size() < total) return;
+        history.save(mapData, "按图生成地形");
+        java.util.Set<Integer> painted = new java.util.HashSet<>();
+        int sea = 0, land = 0;
+        for (int i = 0; i < total; i++) {
+            if (i >= mapData.sampledColors.size()) break;
+            int color = mapData.sampledColors.get(i);
+            boolean ocean = isOceanColor(color);
+            // setTerrain 直接给出标准记录：海洋=组1/编号0，平原=组0/编号255，覆盖层一律 3F FF
+            mapData.tiles.get(i).setTerrain(ocean ? 1 : 0);
+            mapData.editedCells.add(i);
+            painted.add(i);
+            if (ocean) sea++; else land++;
+        }
+        // 陆地按地图真实变体铺开、海洋补官方海岸线，再把海洋格的省规划改成 65535
+        mapData.finishPaint(painted);
+        FileParser.normalizeWaterDistricts(mapData);
+        hexMapView.refresh();
+        updateInfo();
+        Toast.makeText(this, "已按底图生成地形：海洋 " + sea + " 格，陆地（平原）" + land + " 格",
+                Toast.LENGTH_LONG).show();
+    }
+
+    /** 照片颜色是否为“海洋蓝”：色相 180°~256°、有饱和度、不是黑白色。紫色（≈270°）算陆地。 */
+    private static boolean isOceanColor(int color) {
+        int r = (color >> 16) & 0xFF, g = (color >> 8) & 0xFF, b = color & 0xFF;
+        int max = Math.max(r, Math.max(g, b)), min = Math.min(r, Math.min(g, b));
+        int v = max, diff = max - min;
+        if (v < 50) return false;                       // 近黑：算陆地
+        if (diff * 100 / Math.max(1, v) < 18) return false;  // 灰/白/黑：算陆地
+        float h;
+        if (max == min) return false;
+        else if (max == r) h = 60f * (((g - b) / (float) diff) % 6);
+        else if (max == g) h = 60f * ((b - r) / (float) diff + 2);
+        else h = 60f * ((r - g) / (float) diff + 4);
+        if (h < 0) h += 360f;
+        return h >= 180f && h <= 256f;
     }
 
     /** 自定义深色下拉菜单（与 App 主题一致）。 */
