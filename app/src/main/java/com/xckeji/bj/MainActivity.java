@@ -3084,11 +3084,9 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
     }
 
     /**
-     * 首页：assets/background.jpg 当背景（全屏柔和底色 + 顶部完整原图横幅，自适应任何屏幕）
+     * 首页：assets/background.jpg 平铺当背景（按屏宽等比缩放成一条后整屏重复铺贴）
      * + 左侧竖排 5 个灰色渐变按钮。尺寸全部按屏幕宽高的比例算并夹在合理区间内，
      * 横屏/小屏也放得下（超长时按钮列可上下滚动）。
-     * 注：原图是 1920×799 的宽幅图，竖屏直接铺满会放大 3 倍且只剩中间一条，
-     * 所以底色用低分辨率采样放大做柔和模糊、原图按宽完整显示不裁切。
      */
     private void buildHomeOverlay() {
         homeOverlay = new FrameLayout(this);
@@ -3098,33 +3096,21 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         int screenW = getResources().getDisplayMetrics().widthPixels;
         int screenH = getResources().getDisplayMetrics().heightPixels;
 
-        // 1) 全屏底色：低分辨率采样后放大铺满（天然柔和模糊）+ 压暗，保证按钮/文字可读
-        ImageView bgBase = new ImageView(this);
-        bgBase.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        Bitmap baseBmp = loadHomeBackground(Math.max(64, screenW / 12));
-        if (baseBmp != null) bgBase.setImageBitmap(baseBmp);
-        else bgBase.setBackgroundColor(0xFF14141A);
-        bgBase.setColorFilter(0xB4000000);
-        homeOverlay.addView(bgBase, new FrameLayout.LayoutParams(-1, -1));
-
-        // 2) 顶部横幅：原图按宽完整显示（不裁切不变形），底部渐隐融进底色
-        int bannerH = Math.min((int) (screenW * 0.416f), (int) (screenH * 0.45f));
-        Bitmap sharpBmp = loadHomeBackground(screenW);
-        if (sharpBmp != null) {
-            ImageView banner = new ImageView(this);
-            banner.setScaleType(ImageView.ScaleType.FIT_CENTER);
-            banner.setImageBitmap(sharpBmp);
-            homeOverlay.addView(banner, new FrameLayout.LayoutParams(
-                    -1, bannerH, Gravity.TOP | Gravity.LEFT));
-            View fade = new View(this);
-            fade.setBackground(new android.graphics.drawable.GradientDrawable(
-                    android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
-                    new int[]{0x00000000, 0xC0000000}));
-            int fadeH = Math.max((int) (24 * dp), bannerH / 3);
-            FrameLayout.LayoutParams fadeLp = new FrameLayout.LayoutParams(
-                    -1, fadeH, Gravity.TOP | Gravity.LEFT);
-            fadeLp.topMargin = bannerH - fadeH;
-            homeOverlay.addView(fade, fadeLp);
+        // 背景：图片平铺。先把图按屏宽等比缩放成一条（避免横缝里出现半张图），再纵横重复铺满整屏
+        Bitmap tile = loadHomeBackground(Math.max(1, screenW));
+        if (tile != null) {
+            if (screenW > 0 && tile.getWidth() > screenW) {
+                int th = Math.max(1, Math.round(tile.getHeight() * (float) screenW / tile.getWidth()));
+                Bitmap scaled = Bitmap.createScaledBitmap(tile, screenW, th, true);
+                if (scaled != tile) tile = scaled;
+            }
+            android.graphics.drawable.BitmapDrawable tiledBg =
+                    new android.graphics.drawable.BitmapDrawable(getResources(), tile);
+            tiledBg.setTileModeXY(android.graphics.Shader.TileMode.REPEAT,
+                    android.graphics.Shader.TileMode.REPEAT);
+            homeOverlay.setBackground(tiledBg);
+        } else {
+            homeOverlay.setBackgroundColor(0xFF14141A);
         }
 
         // 按钮列：靠左、整体上下居中；用 ScrollView 兜住横屏/小屏放不下的情况
