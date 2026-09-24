@@ -3083,72 +3083,148 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         buildHomeOverlay();
     }
 
-    /** 首页：紫色渐变背景 + 4 个居中按钮（上下间距 35px）。 */
+    /**
+     * 首页：assets/background.jpg 当背景（全屏柔和底色 + 顶部完整原图横幅，自适应任何屏幕）
+     * + 左侧竖排 5 个灰色渐变按钮。尺寸全部按屏幕宽高的比例算并夹在合理区间内，
+     * 横屏/小屏也放得下（超长时按钮列可上下滚动）。
+     * 注：原图是 1920×799 的宽幅图，竖屏直接铺满会放大 3 倍且只剩中间一条，
+     * 所以底色用低分辨率采样放大做柔和模糊、原图按宽完整显示不裁切。
+     */
     private void buildHomeOverlay() {
         homeOverlay = new FrameLayout(this);
         homeOverlay.setLayoutParams(new ViewGroup.LayoutParams(-1, -1));
-        android.graphics.drawable.GradientDrawable gd = new android.graphics.drawable.GradientDrawable(
-                android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
-                new int[]{0xFF2B1055, 0xFF7597DE});
-        homeOverlay.setBackground(gd);
 
+        float dp = getResources().getDisplayMetrics().density;   // 用真实密度换算，保证各机型按钮尺寸一致
+        int screenW = getResources().getDisplayMetrics().widthPixels;
+        int screenH = getResources().getDisplayMetrics().heightPixels;
+
+        // 1) 全屏底色：低分辨率采样后放大铺满（天然柔和模糊）+ 压暗，保证按钮/文字可读
+        ImageView bgBase = new ImageView(this);
+        bgBase.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        Bitmap baseBmp = loadHomeBackground(Math.max(64, screenW / 12));
+        if (baseBmp != null) bgBase.setImageBitmap(baseBmp);
+        else bgBase.setBackgroundColor(0xFF14141A);
+        bgBase.setColorFilter(0xB4000000);
+        homeOverlay.addView(bgBase, new FrameLayout.LayoutParams(-1, -1));
+
+        // 2) 顶部横幅：原图按宽完整显示（不裁切不变形），底部渐隐融进底色
+        int bannerH = Math.min((int) (screenW * 0.416f), (int) (screenH * 0.45f));
+        Bitmap sharpBmp = loadHomeBackground(screenW);
+        if (sharpBmp != null) {
+            ImageView banner = new ImageView(this);
+            banner.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            banner.setImageBitmap(sharpBmp);
+            homeOverlay.addView(banner, new FrameLayout.LayoutParams(
+                    -1, bannerH, Gravity.TOP | Gravity.LEFT));
+            View fade = new View(this);
+            fade.setBackground(new android.graphics.drawable.GradientDrawable(
+                    android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
+                    new int[]{0x00000000, 0xC0000000}));
+            int fadeH = Math.max((int) (24 * dp), bannerH / 3);
+            FrameLayout.LayoutParams fadeLp = new FrameLayout.LayoutParams(
+                    -1, fadeH, Gravity.TOP | Gravity.LEFT);
+            fadeLp.topMargin = bannerH - fadeH;
+            homeOverlay.addView(fade, fadeLp);
+        }
+
+        // 按钮列：靠左、整体上下居中；用 ScrollView 兜住横屏/小屏放不下的情况
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
-        col.setGravity(Gravity.CENTER);
-        FrameLayout.LayoutParams colLp = new FrameLayout.LayoutParams(-1, -1);
-        homeOverlay.addView(col, colLp);
+        ScrollView colScroll = new ScrollView(this);
+        colScroll.setFillViewport(false);
+        colScroll.setVerticalScrollBarEnabled(false);
+        colScroll.addView(col, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        FrameLayout.LayoutParams colLp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.LEFT | Gravity.CENTER_VERTICAL);
+        colLp.leftMargin = clampInt((int) (screenW * 0.07f), (int) (14 * dp), (int) (96 * dp));
+        homeOverlay.addView(colScroll, colLp);
 
-        String[] labels = {"打开战役 stage", "打开征服", "新建战役", "打开地图", "打开 APK"};
-        int density = (int) getResources().getDisplayMetrics().density;
-        for (int i = 0; i < labels.length; i++) {
-            final int mode = (i == 0) ? 0 : (i == 1) ? 1 : (i == 2) ? 3 : (i == 3) ? 2 : 4;
-            Button btn = new Button(this);
-            btn.setText(labels[i]);
-            btn.setTextSize(14);
-            btn.setTextColor(Color.WHITE);
-            btn.setAllCaps(false);
-            android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
-            bg.setColor(0xCC1E3A8A);
-            bg.setCornerRadius(18);
-            bg.setStroke(2, 0x66FFFFFF);
-            btn.setBackground(bg);
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                    (int) (200 * density), (int) (46 * density));
-            if (i > 0) lp.topMargin = 35; // 上下间距 35px
-            btn.setLayoutParams(lp);
-            final int m = mode;
-            btn.setOnClickListener(v -> enterHomeMode(m));
-            col.addView(btn);
-        }
+        // 尺寸自适应：按钮宽≈半屏（170~280dp）、高 44~56dp、间距按屏高
+        int btnW = clampInt((int) (screenW * 0.50f), (int) (170 * dp), (int) (280 * dp));
+        int btnH = clampInt((int) (screenH * 0.062f), (int) (44 * dp), (int) (56 * dp));
+        int gap = clampInt((int) (screenH * 0.014f), (int) (8 * dp), (int) (22 * dp));
+        int padH = Math.max((int) (8 * dp), btnW / 12);
+
         TextView title = new TextView(this);
         title.setText("Terrain Editor");
-        title.setTextSize(22);
         title.setTextColor(Color.WHITE);
-        title.setGravity(Gravity.CENTER);
+        title.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, btnH * 0.52f);
         title.setTypeface(null, android.graphics.Typeface.BOLD);
-        title.setPadding(0, 0, 0, 40);
-        col.addView(title, 0);
+        title.setShadowLayer(6f, 0f, 2f, 0xCC000000);
+        LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(btnW, -2);
+        titleLp.bottomMargin = (int) (gap * 1.4f);
+        col.addView(title, titleLp);
 
-        // 首页左侧：BTL 地图库（在线下载 / 上传分享）
-        Button mapLibBtn = new Button(this);
-        mapLibBtn.setText("BTL地图库");
-        mapLibBtn.setTextSize(13);
-        mapLibBtn.setTextColor(Color.WHITE);
-        mapLibBtn.setAllCaps(false);
-        android.graphics.drawable.GradientDrawable mlbg = new android.graphics.drawable.GradientDrawable();
-        mlbg.setColor(0xCC1E3A8A);
-        mlbg.setCornerRadius(18);
-        mlbg.setStroke(2, 0x66FFFFFF);
-        mapLibBtn.setBackground(mlbg);
-        FrameLayout.LayoutParams mlp = new FrameLayout.LayoutParams(
-                (int) (190 * density), (int) (46 * density),
-                Gravity.LEFT | Gravity.CENTER_VERTICAL);
-        mlp.leftMargin = 14 * density;
-        mapLibBtn.setLayoutParams(mlp);
-        mapLibBtn.setOnClickListener(v -> showMapLibraryDialog());
-        homeOverlay.addView(mapLibBtn);
+        String[] labels = {"打开战役 stage", "打开征服", "新建战役", "打开地图", "BTL战役库"};
+        for (int i = 0; i < labels.length; i++) {
+            final int idx = i;
+            Button btn = new Button(this);
+            btn.setText(labels[i]);
+            btn.setTextColor(Color.WHITE);
+            btn.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, btnH * 0.34f);
+            btn.setAllCaps(false);
+            btn.setTypeface(null, android.graphics.Typeface.BOLD);
+            btn.setShadowLayer(4f, 0f, 1f, 0x99000000);
+            btn.setPadding(padH, 0, padH, 0);
+            btn.setBackground(homeButtonBackground());
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(btnW, btnH);
+            if (i > 0) lp.topMargin = gap;
+            btn.setLayoutParams(lp);
+            btn.setOnClickListener(v -> {
+                if (idx == 4) showMapLibraryDialog();
+                else enterHomeMode(idx == 2 ? 3 : (idx == 3 ? 2 : idx));
+            });
+            col.addView(btn);
+        }
 
         rootFrame.addView(homeOverlay);
+    }
+
+    private static int clampInt(int v, int lo, int hi) {
+        return v < lo ? lo : (v > hi ? hi : v);
+    }
+
+    /** 首页按钮背景：灰色渐变 + 圆角，按下时整体压暗。 */
+    private android.graphics.drawable.Drawable homeButtonBackground() {
+        int corner = (int) (16 * getResources().getDisplayMetrics().density);
+        android.graphics.drawable.GradientDrawable normal = new android.graphics.drawable.GradientDrawable(
+                android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{0xFFA8AFB8, 0xFF4A515E});
+        normal.setCornerRadius(corner);
+        normal.setStroke(2, 0x66FFFFFF);
+        android.graphics.drawable.GradientDrawable pressed = new android.graphics.drawable.GradientDrawable(
+                android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{0xFF7C838D, 0xFF2F353F});
+        pressed.setCornerRadius(corner);
+        pressed.setStroke(2, 0x66FFFFFF);
+        android.graphics.drawable.StateListDrawable sd = new android.graphics.drawable.StateListDrawable();
+        sd.addState(new int[]{android.R.attr.state_pressed}, pressed);
+        sd.addState(new int[]{android.R.attr.state_enabled}, normal);
+        sd.addState(new int[]{}, normal);
+        return sd;
+    }
+
+    /** 读 assets/background.jpg；降采样到最长边约 targetMaxSide，避免 1920×799 原图占太多内存。 */
+    private Bitmap loadHomeBackground(int targetMaxSide) {
+        try {
+            BitmapFactory.Options bounds = new BitmapFactory.Options();
+            bounds.inJustDecodeBounds = true;
+            InputStream probe = getAssets().open("background.jpg");
+            BitmapFactory.decodeStream(probe, null, bounds);
+            probe.close();
+            int sample = 1;
+            while (Math.max(bounds.outWidth, bounds.outHeight) / (sample * 2) >= targetMaxSide) sample *= 2;
+            BitmapFactory.Options opts = new BitmapFactory.Options();
+            opts.inSampleSize = sample;
+            InputStream is = getAssets().open("background.jpg");
+            Bitmap bmp = BitmapFactory.decodeStream(is, null, opts);
+            is.close();
+            return bmp;
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /** 首页按钮：0=打开战役 1=打开征服 2=打开地图 3=新建战役 */
@@ -3157,19 +3233,9 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         // 先选文件/建图，读取成功后再进入编辑器；取消则留在首页
         if (mode == 3) {
             newBtlMap();
-        } else if (mode == 4) {
-            openApkFile();
         } else {
             openFile();
         }
-    }
-
-    /** 打开 APK/压缩包：列出里面的 .btl/.bin，点选后直接加载进编辑器（wc4Etest 同款功能）。 */
-    private void openApkFile() {
-        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-        i.addCategory(Intent.CATEGORY_OPENABLE);
-        i.setType("*/*");
-        startActivityForResult(i, REQUEST_APK);
     }
 
     /** 文件读取成功（或新建成功）后进入编辑器。 */
@@ -4737,7 +4803,6 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
     private static final int REQUEST_OVERLAY = 300;
     private static final int REQUEST_GUIDE = 301;
     private static final int REQUEST_CONQUEST_BIN = 302;
-    private static final int REQUEST_APK = 305;
     private static final int REQUEST_MAPLIB_UPLOAD = 306;
     private static final String MAPLIB_BASE = "https://dx.xckeji.xyz/map_library";
     private void importOverlay() {
@@ -7288,125 +7353,6 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
             } catch (Exception e) {
                 Toast.makeText(this, "世界地形加载失败: " + e.getMessage(), Toast.LENGTH_LONG).show();
             }
-        } else if (req == REQUEST_APK && res == RESULT_OK && data != null && data.getData() != null) {
-            final Uri apkUri = data.getData();
-            Toast.makeText(this, "正在扫描 APK，请稍候…", Toast.LENGTH_SHORT).show();
-            new Thread(() -> {
-                final java.util.List<String[]> apkMaps = new java.util.ArrayList<>();
-                Exception err = null;
-                try {
-                    InputStream apkIs = getContentResolver().openInputStream(apkUri);
-                    java.util.zip.ZipInputStream zis = new java.util.zip.ZipInputStream(apkIs);
-                    java.util.zip.ZipEntry ze;
-                    while ((ze = zis.getNextEntry()) != null) {
-                        if (!ze.isDirectory()) {
-                            String n = ze.getName().toLowerCase();
-                            if (n.endsWith(".btl") || n.endsWith(".bin")) {
-                                apkMaps.add(new String[]{ze.getName(), String.valueOf(ze.getSize())});
-                            }
-                        }
-                        zis.closeEntry();
-                    }
-                    zis.close();
-                    apkIs.close();
-                } catch (Exception e) {
-                    err = e;
-                }
-                final Exception ferr = err;
-                runOnUiThread(() -> {
-                    if (ferr != null) {
-                        Toast.makeText(this, "打开 APK 失败: " + ferr.getMessage(), Toast.LENGTH_LONG).show();
-                        return;
-                    }
-                    if (apkMaps.isEmpty()) {
-                        Toast.makeText(this, "APK 里没有 .btl/.bin 地图文件", Toast.LENGTH_LONG).show();
-                        return;
-                    }
-                    // 排序：.btl 优先，world/map 次之，其余最后
-                    apkMaps.sort((x, y) -> {
-                        String a = x[0].toLowerCase(), b = y[0].toLowerCase();
-                        int sa = a.endsWith(".btl") ? 0 : (a.startsWith("world") || a.startsWith("map") ? 1 : 2);
-                        int sb = b.endsWith(".btl") ? 0 : (b.startsWith("world") || b.startsWith("map") ? 1 : 2);
-                        if (sa != sb) return sa - sb;
-                        return a.compareTo(b);
-                    });
-                    final java.util.List<String> allNames = new java.util.ArrayList<>();
-                    final java.util.Map<String, String> labelToName = new java.util.HashMap<>();
-                    for (String[] m : apkMaps) {
-                        String label = m[0] + "（" + m[1] + "B）";
-                        allNames.add(label);
-                        labelToName.put(label, m[0]);
-                    }
-                    final ArrayAdapter<String> adapter = new ArrayAdapter<>(this,
-                            android.R.layout.simple_list_item_1, allNames);
-                    final EditText search = new EditText(this);
-                    search.setHint("搜索（如 stage / world / map2）");
-                    search.setSingleLine(true);
-                    search.addTextChangedListener(new android.text.TextWatcher() {
-                        @Override public void beforeTextChanged(CharSequence s2, int a, int b2, int c) {}
-                        @Override public void onTextChanged(CharSequence s2, int a, int b2, int c) {
-                            adapter.getFilter().filter(s2);
-                        }
-                        @Override public void afterTextChanged(android.text.Editable s2) {}
-                    });
-                    final ListView lv = new ListView(this);
-                    lv.setAdapter(adapter);
-                    lv.setOnItemClickListener((parent, view, pos, id) -> {
-                        try {
-                            String label = adapter.getItem(pos);
-                            String target = labelToName.get(label);
-                            if (target == null) return;
-                            InputStream is2 = getContentResolver().openInputStream(apkUri);
-                            java.util.zip.ZipInputStream z2 = new java.util.zip.ZipInputStream(is2);
-                            java.util.zip.ZipEntry e2;
-                            byte[] picked = null;
-                            while ((e2 = z2.getNextEntry()) != null) {
-                                if (e2.getName().equals(target)) {
-                                    java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
-                                    byte[] buf = new byte[8192];
-                                    int n;
-                                    while ((n = z2.read(buf)) != -1) bos.write(buf, 0, n);
-                                    picked = bos.toByteArray();
-                                    break;
-                                }
-                                z2.closeEntry();
-                            }
-                            z2.close();
-                            is2.close();
-                            if (picked == null) {
-                                Toast.makeText(this, "读取失败", Toast.LENGTH_SHORT).show();
-                                return;
-                            }
-                            String fname = target.substring(target.lastIndexOf('/') + 1);
-                            mapData = FileParser.loadFile(picked, fname);
-                            currentFileName = fname;
-                            history.clear();
-                            if (mapData != null) mapData.historyRef = history;
-                            hexMapView.setMapData(mapData);
-                            updateInfo();
-                            updateBtnState();
-                            blockIdText.setText("未选中");
-                            selectedInfo.setText("已从 APK 加载: " + fname);
-                            // BIN 用完整布局，BTL 用战役布局
-                            editorMode = fname.toLowerCase().endsWith(".bin") ? 2 : 0;
-                            maybeLoadConquestBin();
-                            enterEditorAfterLoad();
-                        } catch (Exception ex) {
-                            Toast.makeText(this, "加载失败: " + ex.getMessage(), Toast.LENGTH_LONG).show();
-                        }
-                    });
-                    LinearLayout apkLayout = new LinearLayout(this);
-                    apkLayout.setOrientation(LinearLayout.VERTICAL);
-                    apkLayout.setPadding(20, 8, 20, 8);
-                    apkLayout.addView(search);
-                    apkLayout.addView(lv, new LinearLayout.LayoutParams(-1, 0, 1));
-                    AlertDialog.Builder b = new AlertDialog.Builder(this);
-                    b.setTitle("选择 APK 内的地图文件（共 " + apkMaps.size() + " 个）");
-                    b.setView(apkLayout);
-                    b.setNegativeButton("取消", null);
-                    b.show();
-                });
-            }).start();
         } else if (req == REQUEST_SAVE && res == RESULT_OK && data != null && data.getData() != null) {
             // 用户选择了保存目录
             Uri treeUri = data.getData();
