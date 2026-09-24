@@ -39,6 +39,8 @@ public class MapData {
     public java.util.List<Legion> legions = new java.util.ArrayList<>();
     /** 省规划（2字节/格）。 */
     public int[] provinces = new int[0];
+    /** 载入时的省规划快照：保存时未改动过的格子直接写回原始字节（避免坐标换算损失）。 */
+    public int[] provincesAtLoad = new int[0];
     /**
      * 存储坐标基准偏移：普通 BTL=0；官方整合版征服文件把建筑/兵种坐标存成
      * “世界坐标”（地图本地坐标 + 截取偏移），解析时减、写回时加这个值。

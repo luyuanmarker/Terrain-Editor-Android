@@ -4979,6 +4979,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
                 if (mapData.multiSelectMode && mapData.hasSelectedBlocks()) {
                     history.save(mapData);
                     mapData.applyTerrainToSelected(g, (g == 0) ? 255 : 0);
+                    FileParser.normalizeWaterDistricts(mapData);
                     hexMapView.refresh(); updateInfo();
                     Toast.makeText(this, "已批量修改 " + mapData.selectedBlocks.size() + " 个格子为 " + tn, Toast.LENGTH_SHORT).show();
                     return;
@@ -4993,6 +4994,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
                     mapData.editedCells.add(y * mapData.width + x);
                     // 涂地后处理被涂格子：陆地按位置选真实变体
                     mapData.finishPaint(java.util.Collections.singleton(y * mapData.width + x));
+                    FileParser.normalizeWaterDistricts(mapData);
                     hexMapView.refresh(); updateInfo();
                 } else {
                     Toast.makeText(this, "请先点击地图上的格子", Toast.LENGTH_SHORT).show();
@@ -6832,6 +6834,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
             int seed = (int)(System.currentTimeMillis() & 0x7FFFFFFF);
             RandomMapGenerator.randomizeTerrain(mapData.tiles, probability[0], allowedIds, seed,
                     buildingIds, seaCb.isChecked(), mapData.terrainPatternList);
+            FileParser.normalizeWaterDistricts(mapData);
             hexMapView.refresh();
             updateInfo();
             int changedCount = (int)(probability[0] * mapData.tiles.size());
@@ -7096,6 +7099,10 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         try{
             // 保存前检查外部存储写入权限（安卓 11+ 需要“所有文件访问”）
             if (!ensureStorageAccess()) return;
+            // 保存前静默修正：海洋地块省规划统一为 0xFFFF（官方 MapEdit / 熊编辑器保存时同样处理）
+            int waterFixed = mapData == null ? 0 : FileParser.normalizeWaterDistricts(mapData);
+            String waterNote = waterFixed > 0
+                    ? "\n已按官方规则整理 " + waterFixed + " 个海洋地块的省规划（65535）" : "";
             // 官方模式（扩展后保存）：与官方地图编辑器一致——只输出扩展后的底图 world.bin
             if (mapData.conquestExtended && mapData.binOriginalData != null) {
                 byte[] binData = mapData.binOriginalData;
@@ -7144,11 +7151,11 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
                 bos.write(binData);
                 bos.close();
                 Toast.makeText(this, "✅ 已生成文件：\n" + outFile.getName() + "\n"
-                        + binOut.getName() + "\n位置：" + dir.getAbsolutePath(),
+                        + binOut.getName() + "\n位置：" + dir.getAbsolutePath() + waterNote,
                         Toast.LENGTH_LONG).show();
                 return;
             }
-            Toast.makeText(this,"✅ 已保存到: " + outFile.getAbsolutePath(),Toast.LENGTH_LONG).show();
+            Toast.makeText(this,"✅ 已保存到: " + outFile.getAbsolutePath() + waterNote,Toast.LENGTH_LONG).show();
         }catch(Exception e){
             android.util.Log.e("SAVE","error",e);
             Toast.makeText(this,"❌ 保存失败: "+e.getMessage(),Toast.LENGTH_LONG).show();

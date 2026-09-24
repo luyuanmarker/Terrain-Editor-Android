@@ -48,7 +48,15 @@ public class FileParser {
         public int reinforceCount, airstrikeCount, mineCount, strategyCount, airSupportCount;
         public int placementCountA, placementCountB, capitalCount;
         public int terrainStart;
+        public int adminStart;
+        public int ownershipStart;
         public int buildingStart;
+        /**
+         * 省规划/归属段的格数（官方 rule_wc4_btl.xml 里 bm3/bm4 的 Count = 地块总数 bm0_23）。
+         * 真实游戏文件里它常常比 宽×高 多几格（历史扩展残留），
+         * 段偏移必须按这个值算，否则建筑/兵种/尾段全部错位、保存出来的文件进游戏会崩。
+         */
+        public int sectionTiles;
         /** 地图序号==0 时 BTL 自带地形；征服地图（序号!=0）地形在 world BIN 中。 */
         public boolean independentTerrain;
     }
@@ -79,11 +87,15 @@ public class FileParser {
         h.independentTerrain = (h.mapId == 0);
         h.terrainStart = 128 + h.legionCount * 300;
         int totalTiles = h.width * h.height;
+        // 官方 BTLTooL：地形段数量 = 宽×高(sumGride)；省规划/归属段数量 = 地块总数(bm0_23)。
+        int declaredTiles = bb.getInt(0x58);
+        h.sectionTiles = (declaredTiles >= totalTiles && declaredTiles <= totalTiles + 4096)
+                ? declaredTiles : totalTiles;
         // 征服地图（地图序号!=0）地形不在 BTL 中，直接是省规划段
         int terrainBytes = h.independentTerrain ? totalTiles * 16 : 0;
-        int adminStart = h.terrainStart + terrainBytes;
-        int ownershipStart = adminStart + totalTiles * 2;
-        h.buildingStart = ownershipStart + totalTiles * 1;
+        h.adminStart = h.terrainStart + terrainBytes;
+        h.ownershipStart = h.adminStart + h.sectionTiles * 2;
+        h.buildingStart = h.ownershipStart + h.sectionTiles * 1;
         return h;
     }
 
@@ -133,9 +145,9 @@ public class FileParser {
         return version == 1 ? 48 : 64;
     }
 
-    /** 援军记录大小：版本1/2=80字节，版本3=104字节。 */
+    /** 援军记录大小：版本1=80字节，版本2/3=104字节（与熊编辑器/游戏内实际文件一致）。 */
     private static int reinforceRecSize(int version) {
-        return version <= 2 ? 80 : 104;
+        return version == 1 ? 80 : 104;
     }
 
     /**
@@ -150,8 +162,9 @@ public class FileParser {
         if (total <= 0 || offset <= 0) return 0;
         int checked = 0, ok = 0;
         // 省规划（2字节/格）
-        int adminStart = h.terrainStart + (h.independentTerrain ? total * 16 : 0);
-        for (int i = 0; i < total; i++) {
+        int adminStart = h.adminStart;
+        int scan = Math.min(total, h.sectionTiles);
+        for (int i = 0; i < scan; i++) {
             int addr = adminStart + i * 2;
             if (addr + 2 > data.length) break;
             int pv = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
@@ -232,7 +245,7 @@ public class FileParser {
         mapData.coordBase = detectCoordBase(data, header);
         int totalTiles = header.width * header.height;
         // 省规划（2字节/格）
-        int adminStart = header.terrainStart + (header.independentTerrain ? totalTiles * 16 : 0);
+        int adminStart = header.adminStart;
         mapData.provinces = new int[totalTiles];
         for (int i = 0; i < totalTiles; i++) {
             if (adminStart + i * 2 + 2 <= data.length) {
@@ -243,7 +256,9 @@ public class FileParser {
                         ? pv : Math.max(0, pv - mapData.coordBase);
             }
         }
-        int ownershipStart = header.buildingStart - totalTiles;
+        // 记录载入值，保存时未改动过的格子直接写回原始字节（避免坐标换算丢信息）
+        mapData.provincesAtLoad = mapData.provinces.clone();
+        int ownershipStart = header.ownershipStart;
         mapData.belongs = new byte[totalTiles];
         if (ownershipStart >= 0 && ownershipStart + totalTiles <= data.length) {
             System.arraycopy(data, ownershipStart, mapData.belongs, 0, totalTiles);
@@ -486,27 +501,106 @@ public class FileParser {
         return out;
     }
 
-    /** 海洋区划自动修正：地形组=1 的格子，行政区划（省规划）必须是 0xFFFF；返回修正数量。 */
-    public static int fixOceanDistricts(MapData mapData) {
-        if (mapData == null || mapData.provinces == null || mapData.tiles == null
-                || mapData.btlOriginalData == null) return 0;
-        BtlHeaderInfo h = parseBTLHeader(mapData.btlOriginalData);
-        int total = Math.min(mapData.getTotalTiles(), mapData.provinces.length);
-        int adminStart = h.terrainStart + (h.independentTerrain ? h.width * h.height * 16 : 0);
-        int fixed = 0;
-        for (int i = 0; i < total; i++) {
-            TerrainTile t = mapData.tiles.get(i);
-            if (t == null || t.bmTerrain1Group != 1) continue;
-            if (mapData.provinces[i] == 0xFFFF) continue;
-            mapData.provinces[i] = 0xFFFF;
-            int off = adminStart + i * 2;
-            if (off + 1 < mapData.btlOriginalData.length) {
-                mapData.btlOriginalData[off] = (byte) 0xFF;
-                mapData.btlOriginalData[off + 1] = (byte) 0xFF;
+    /**
+     * 把“海洋地块的行政区划/省规划”统一修正为 0xFFFF（无省份）。
+     *
+     * 依据（1.17.2 游戏自带文件实测）：
+     * - world.bin：3670/3670 个海洋格区划都是 65535；world2.bin：7681/7683；
+     * - 官方 MapEdit（Wc4MapBinDAO.checkMapTerrainIds）读地图与编辑后会强制这一条，
+     *   熊编辑器也有同样的校验/一键修复；
+     * - 少数旧战役文件（event/frontier 系列）确实存在海洋格带省份值的情况，游戏能容忍，
+     *   所以这是“与官方编辑器一致的标准清理”，不是游戏崩溃的硬性原因。
+     *
+     * 同时修正内存数组与原始字节（BTL 省规划段 + 世界底图 BIN 的省规划段），
+     * 返回被修正的格数。
+     */
+    public static int normalizeWaterDistricts(MapData mapData) {
+        if (mapData == null || mapData.tiles == null || mapData.tiles.isEmpty()) return 0;
+        // 征服 BTL 自带地形为空，内存里的地形只是「未加载底图」的占位海洋，
+        // 这时按地形去改省规划会把整张图的省规划清成 65535，必须跳过。
+        if (mapData.btlOriginalData != null && mapData.binOriginalData == null) {
+            try {
+                if (!parseBTLHeader(mapData.btlOriginalData).independentTerrain) return 0;
+            } catch (Exception ignored) {
             }
-            fixed++;
         }
-        return fixed;
+        int total = mapData.tiles.size();
+        java.util.TreeSet<Integer> fixedCells = new java.util.TreeSet<>();
+
+        // 1) 内存省规划数组（数据面板显示、保存 btl 都用它）
+        if (mapData.provinces != null) {
+            int n = Math.min(total, mapData.provinces.length);
+            for (int i = 0; i < n; i++) {
+                TerrainTile t = mapData.tiles.get(i);
+                if (t == null || t.bmTerrain1Group != 1) continue;
+                if (mapData.provinces[i] == 0xFFFF) continue;
+                mapData.provinces[i] = 0xFFFF;
+                fixedCells.add(i);
+            }
+        }
+
+        // 2) BTL 省规划段（战役自带地形；征服就是截取窗口的省规划）
+        if (mapData.btlOriginalData != null) {
+            try {
+                BtlHeaderInfo h = parseBTLHeader(mapData.btlOriginalData);
+                int n = Math.min(total, h.width * h.height);
+                int adminStart = h.adminStart;
+                for (int i = 0; i < n; i++) {
+                    TerrainTile t = mapData.tiles.get(i);
+                    if (t == null || t.bmTerrain1Group != 1) continue;
+                    int off = adminStart + i * 2;
+                    if (off + 1 >= mapData.btlOriginalData.length) break;
+                    if ((mapData.btlOriginalData[off] & 0xFF) == 0xFF
+                            && (mapData.btlOriginalData[off + 1] & 0xFF) == 0xFF) continue;
+                    mapData.btlOriginalData[off] = (byte) 0xFF;
+                    mapData.btlOriginalData[off + 1] = (byte) 0xFF;
+                    fixedCells.add(i);
+                }
+            } catch (Exception ignored) {
+            }
+        }
+
+        // 3) 世界底图 BIN 的省规划段（换算方式与 saveAsBIN 一致）
+        if (mapData.binOriginalData != null) {
+            try {
+                int[] dims = binDims(mapData.binOriginalData);
+                if (dims != null) {
+                    int binW = dims[0], binH = dims[1], headerSize = dims[2];
+                    int regionStart = headerSize + binW * binH * 16;
+                    int cropX = 0, cropY = 0;
+                    if (mapData.btlOriginalData != null) {
+                        BtlHeaderInfo h = parseBTLHeader(mapData.btlOriginalData);
+                        if (mapData.width == h.width && mapData.height == h.height) {
+                            cropX = h.captureX;
+                            cropY = h.captureY;
+                        }
+                    }
+                    for (int y = 0; y < mapData.height; y++) {
+                        for (int x = 0; x < mapData.width; x++) {
+                            int i = y * mapData.width + x;
+                            if (i >= total) break;
+                            TerrainTile t = mapData.tiles.get(i);
+                            if (t == null || t.bmTerrain1Group != 1) continue;
+                            int reg = (y + cropY) * binW + (x + cropX);
+                            int off = regionStart + reg * 2;
+                            if (off + 1 >= mapData.binOriginalData.length) continue;
+                            if ((mapData.binOriginalData[off] & 0xFF) == 0xFF
+                                    && (mapData.binOriginalData[off + 1] & 0xFF) == 0xFF) continue;
+                            mapData.binOriginalData[off] = (byte) 0xFF;
+                            mapData.binOriginalData[off + 1] = (byte) 0xFF;
+                            fixedCells.add(i);
+                        }
+                    }
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        return fixedCells.size();
+    }
+
+    /** 海洋区划自动修正（等价于 {@link #normalizeWaterDistricts}，保留旧入口）。 */
+    public static int fixOceanDistricts(MapData mapData) {
+        return normalizeWaterDistricts(mapData);
     }
 
     /** 通用尾段记录写回：把 raw 覆盖到 btlOriginalData 对应位置（坐标字段如需重映射请自行处理）。 */
@@ -734,7 +828,7 @@ public class FileParser {
         ByteBuffer bb = ByteBuffer.wrap(result).order(ByteOrder.LITTLE_ENDIAN);
         bb.putInt(0x20, h.armyCount + 1);
         // 军团归属：地块归入指定军团（0xFF=中立；单位必须有归属）
-        int ownershipStart = h.buildingStart - h.width * h.height;
+        int ownershipStart = h.ownershipStart;
         int tileIdx = y * mapData.width + x;
         if (legion >= 0 && legion <= 0xFF && ownershipStart >= 0
                 && ownershipStart + tileIdx < result.length) {
@@ -766,14 +860,15 @@ public class FileParser {
         if (index < 0 || index >= mapData.provinces.length) return;
         try {
             BtlHeaderInfo h = parseBTLHeader(mapData.btlOriginalData);
-            int total = h.width * h.height;
-            int adminStart = h.terrainStart + (h.independentTerrain ? total * 16 : 0);
-            int addr = adminStart + index * 2;
+            int addr = h.adminStart + index * 2;
             if (addr + 2 > mapData.btlOriginalData.length) return;
             int pv = mapData.provinces[index];
             int stored = (pv == 0 || pv == 0xFFFF) ? pv : pv + mapData.coordBase;
             mapData.btlOriginalData[addr] = (byte) (stored & 0xFF);
             mapData.btlOriginalData[addr + 1] = (byte) ((stored >> 8) & 0xFF);
+            if (mapData.provincesAtLoad != null && index < mapData.provincesAtLoad.length) {
+                mapData.provincesAtLoad[index] = pv;
+            }
         } catch (Exception ignored) {
         }
     }
@@ -784,9 +879,7 @@ public class FileParser {
         if (index < 0 || index >= mapData.belongs.length) return;
         try {
             BtlHeaderInfo h = parseBTLHeader(mapData.btlOriginalData);
-            int total = h.width * h.height;
-            int ownershipStart = h.buildingStart - total;
-            int addr = ownershipStart + index;
+            int addr = h.ownershipStart + index;
             if (addr < 0 || addr >= mapData.btlOriginalData.length) return;
             mapData.btlOriginalData[addr] = mapData.belongs[index];
         } catch (Exception ignored) {
@@ -804,6 +897,8 @@ public class FileParser {
         if (mapData.width < 1 || mapData.height < 1 || totalTiles > 65535) {
             throw new IOException("BTL 地图尺寸无效（地块坐标最大支持 65535）");
         }
+        // 保存前静默修正：海洋地块的省规划必须是 0xFFFF（游戏要求，缺了会读档闪退）。
+        normalizeWaterDistricts(mapData);
 
         if (mapData.btlOriginalData != null) {
             // 有原始BTL：基于原始数据修改（支持扩展后的文件）
@@ -812,23 +907,29 @@ public class FileParser {
             int oldTotalTiles = h.width * h.height;
             int newTotalTiles = mapData.width * mapData.height;
             int terrainStart = h.terrainStart;
+            boolean resized = (newTotalTiles != oldTotalTiles);
 
             // 征服地图（地图序号!=0）地形不在 BTL 中，各段偏移不含地形
             int oldTerrainBytes = h.independentTerrain ? oldTotalTiles * 16 : 0;
             int newTerrainBytes = h.independentTerrain ? newTotalTiles * 16 : 0;
 
+            // 官方约定：地形段 = 宽×高 格；省规划/归属段 = 地块总数(bm0_23) 格。
+            // 未改尺寸时沿用原文件的地块总数，改尺寸（扩展/裁剪）时收缩为新的宽×高。
+            int oldSectionTiles = h.sectionTiles;
+            int newSectionTiles = resized ? newTotalTiles : oldSectionTiles;
+
             // 旧文件各段偏移
-            int oldAdminStart = terrainStart + oldTerrainBytes;
-            int oldOwnershipStart = oldAdminStart + oldTotalTiles * 2;
-            int oldBuildingStart = oldOwnershipStart + oldTotalTiles;
+            int oldAdminStart = h.adminStart;
+            int oldOwnershipStart = h.ownershipStart;
+            int oldBuildingStart = h.buildingStart;
             int oldBuildingBytes = h.buildingCount * 32;
             int oldAfterBuildings = oldBtl.length - (oldBuildingStart + oldBuildingBytes);
             if (oldAfterBuildings < 0) oldAfterBuildings = 0;
 
             // 新文件各段偏移
             int newAdminStart = terrainStart + newTerrainBytes;
-            int newOwnershipStart = newAdminStart + newTotalTiles * 2;
-            int newBuildingStart = newOwnershipStart + newTotalTiles;
+            int newOwnershipStart = newAdminStart + newSectionTiles * 2;
+            int newBuildingStart = newOwnershipStart + newSectionTiles;
 
             // 建筑段：按内存建筑状态重建（保留未修改记录的全部字段）
             byte[] newBuildings = mergeBuildings(oldBtl, oldBuildingStart, h.buildingCount, mapData);
@@ -847,19 +948,37 @@ public class FileParser {
                 }
             }
 
-            // 3. 省规划（2字节/格）：从内存省区数组写回（值=省区代表格坐标，加坐标基准）
-            for (int i = 0; i < newTotalTiles; i++) {
+            // 3. 省规划（2字节/格）：从内存省区数组写回（值=省区代表格坐标，加坐标基准）。
+            //    未改动过的格子（含超出宽×高的额外条目）直接写回原始字节——
+            //    征服文件省规划存的是世界坐标，重新编码会把小于坐标基准的旧值写成 0。
+            int[] loadedProv = mapData.provincesAtLoad;
+            for (int i = 0; i < newSectionTiles; i++) {
                 int addr = newAdminStart + i * 2;
-                int pv = (mapData.provinces != null && i < mapData.provinces.length)
-                        ? mapData.provinces[i] : 0;
+                int pv = (i < newTotalTiles && mapData.provinces != null && i < mapData.provinces.length)
+                        ? mapData.provinces[i] : 0xFFFF;
+                if (!resized && oldAdminStart + i * 2 + 1 < oldBtl.length) {
+                    boolean untouched = (i >= newTotalTiles)
+                            || (loadedProv != null && i < loadedProv.length && pv == loadedProv[i]);
+                    if (untouched) {
+                        result[addr] = oldBtl[oldAdminStart + i * 2];
+                        result[addr + 1] = oldBtl[oldAdminStart + i * 2 + 1];
+                        continue;
+                    }
+                }
                 int stored = (pv == 0 || pv == 0xFFFF) ? pv : pv + mapData.coordBase;
                 result[addr] = (byte) (stored & 0xFF);
                 result[addr + 1] = (byte) ((stored >> 8) & 0xFF);
             }
 
-            // 4. 军团归属（1字节/格）
-            for (int i = 0; i < newTotalTiles; i++) {
-                result[newOwnershipStart + i] = i < oldTotalTiles ? oldBtl[oldOwnershipStart + i] : (byte) 0xFF;
+            // 4. 军团归属（1字节/格）：内存数组就是原始字节，超出宽×高的额外条目原样保留
+            for (int i = 0; i < newSectionTiles; i++) {
+                if (i < newTotalTiles && mapData.belongs != null && i < mapData.belongs.length) {
+                    result[newOwnershipStart + i] = mapData.belongs[i];
+                } else if (!resized && oldOwnershipStart + i < oldBtl.length) {
+                    result[newOwnershipStart + i] = oldBtl[oldOwnershipStart + i];
+                } else {
+                    result[newOwnershipStart + i] = (byte) 0xFF;
+                }
             }
 
             // 5. 建筑段
@@ -875,7 +994,7 @@ public class FileParser {
             ByteBuffer bb = ByteBuffer.wrap(result).order(ByteOrder.LITTLE_ENDIAN);
             bb.putInt(0x10, mapData.width);
             bb.putInt(0x14, mapData.height);
-            bb.putInt(0x58, newTotalTiles);
+            bb.putInt(0x58, newSectionTiles);
             bb.putInt(0x1C, newBuildingBytes / 32);
             return result;
         } else {
@@ -943,12 +1062,13 @@ public class FileParser {
             int adminStart = terrainStart + terrainSize;
             for (int i = 0; i < totalTiles; i++) {
                 TerrainTile tile = mapData.tiles.get(i);
+                // 官方约定：海洋(组1) → 0xFFFF；陆地 → 0（无省区）
                 if (tile.bmTerrain1Group == 1) {
+                    result[adminStart + i * 2] = (byte) 0xFF;
+                    result[adminStart + i * 2 + 1] = (byte) 0xFF;
+                } else {
                     result[adminStart + i * 2] = 0;
                     result[adminStart + i * 2 + 1] = 0;
-                } else {
-                    result[adminStart + i * 2] = (byte)0xFF;
-                    result[adminStart + i * 2 + 1] = (byte)0xFF;
                 }
             }
 
@@ -1204,46 +1324,39 @@ public class FileParser {
     private static byte[] mergeBuildings(byte[] oldBtl, int oldBuildingStart, int oldBuildingCount,
                                          MapData mapData) {
         int total = mapData.getTotalTiles();
-        int newCount = mapData.getBuildingCount();
-        for (int i = 0; i < oldBuildingCount; i++) {
-            int addr = oldBuildingStart + i * 32;
-            if (addr + 32 > oldBtl.length) break;
-            int coord = (ByteBuffer.wrap(oldBtl).order(ByteOrder.LITTLE_ENDIAN)
-                    .getShort(addr) & 0xFFFF) - mapData.coordBase;
-            int bid = (coord >= 0 && coord < total) ? mapData.buildingIds.get(coord) : 0;
-            if (bid <= 0 && (oldBtl[addr + 4] & 0xFF) == 0) newCount++;
-        }
-        byte[] out = new byte[newCount * 32];
+        // 第一遍统计数量（判定必须与第二遍完全一致，否则会写越界）
         java.util.Map<Integer, Integer> oldRecordByTile = new java.util.HashMap<>();
+        java.util.List<Integer> keepAddrs = new java.util.ArrayList<>();
         for (int i = 0; i < oldBuildingCount; i++) {
             int addr = oldBuildingStart + i * 32;
             if (addr + 32 > oldBtl.length) break;
-            int coord = (ByteBuffer.wrap(oldBtl).order(ByteOrder.LITTLE_ENDIAN)
-                    .getShort(addr) & 0xFFFF) - mapData.coordBase;
-            oldRecordByTile.put(coord, addr);
-        }
-        int outIdx = 0;
-        // 原有记录：仍在内存中则保留并更新类型
-        for (int i = 0; i < oldBuildingCount; i++) {
-            int addr = oldBuildingStart + i * 32;
-            if (addr + 32 > oldBtl.length) break;
-            int coord = (ByteBuffer.wrap(oldBtl).order(ByteOrder.LITTLE_ENDIAN)
-                    .getShort(addr) & 0xFFFF) - mapData.coordBase;
-            int bid = (coord >= 0 && coord < total) ? mapData.buildingIds.get(coord) : 0;
-            if (bid > 0) {
-                System.arraycopy(oldBtl, addr, out, outIdx * 32, 32);
-                out[outIdx * 32 + 4] = (byte) bid;
-                outIdx++;
-            } else if ((oldBtl[addr + 4] & 0xFF) == 0) {
-                // 类型 0 的原记录：不是建筑，原样保留
-                System.arraycopy(oldBtl, addr, out, outIdx * 32, 32);
-                outIdx++;
+            int coord = buildingCoord(oldBtl, addr, mapData.coordBase);
+            if (coord >= 0 && coord < total && !oldRecordByTile.containsKey(coord)) {
+                oldRecordByTile.put(coord, addr);
             }
+            if (keepOldBuilding(oldBtl, addr, total, mapData)) keepAddrs.add(addr);
         }
-        // 新增建筑：内存有、原文件没有
+        java.util.List<Integer> addTiles = new java.util.ArrayList<>();
         for (int i = 0; i < total; i++) {
             int bid = mapData.buildingIds.get(i);
             if (bid <= 0 || oldRecordByTile.containsKey(i)) continue;
+            addTiles.add(i);
+        }
+        byte[] out = new byte[(keepAddrs.size() + addTiles.size()) * 32];
+        int outIdx = 0;
+        // 原有记录：坐标能对上地块的按内存类型更新，对不上的（占位/越界记录）原样保留
+        for (int addr : keepAddrs) {
+            System.arraycopy(oldBtl, addr, out, outIdx * 32, 32);
+            int coord = buildingCoord(oldBtl, addr, mapData.coordBase);
+            if (coord >= 0 && coord < total) {
+                int bid = mapData.buildingIds.get(coord);
+                if (bid > 0) out[outIdx * 32 + 4] = (byte) bid;
+            }
+            outIdx++;
+        }
+        // 新增建筑：内存有、原文件没有
+        for (int i : addTiles) {
+            int bid = mapData.buildingIds.get(i);
             int off = outIdx * 32;
             int stored = i + mapData.coordBase;
             byte[] draft = mapData.newBuildingRaws != null
@@ -1258,6 +1371,25 @@ public class FileParser {
             outIdx++;
         }
         return out;
+    }
+
+    /** 建筑记录坐标（0x0，uint16）→ 地图本地坐标。 */
+    private static int buildingCoord(byte[] src, int addr, int coordBase) {
+        return ((src[addr] & 0xFF) | ((src[addr + 1] & 0xFF) << 8)) - coordBase;
+    }
+
+    /**
+     * 原有建筑记录是否保留：
+     * - 坐标对不上地图地块（越界/占位记录）→ 原样保留（真实游戏文件里存在这类记录，丢了会改变建筑总数导致后续段错位）；
+     * - 该地块内存里仍有建筑 → 保留（类型按内存更新）；
+     * - 类型 0 的占位记录 → 保留；
+     * - 其余（该地块建筑被删掉）→ 丢弃。
+     */
+    private static boolean keepOldBuilding(byte[] oldBtl, int addr, int total, MapData mapData) {
+        int coord = buildingCoord(oldBtl, addr, mapData.coordBase);
+        if (coord < 0 || coord >= total) return true;
+        if (mapData.buildingIds.get(coord) > 0) return true;
+        return (oldBtl[addr + 4] & 0xFF) == 0;
     }
 
     /**
@@ -1425,6 +1557,7 @@ public class FileParser {
         refreshArmies(mapData);
         refreshTraps(mapData);
         mapData.buildTerrainPatterns();
+        normalizeWaterDistricts(mapData);
         return mapData;
     }
 
@@ -1517,6 +1650,8 @@ public class FileParser {
 
     public static byte[] saveAsBIN(MapData mapData) throws IOException {
         int totalTiles = mapData.width * mapData.height;
+        // 保存前静默修正：海洋地块的省规划必须是 0xFFFF（世界底图同样适用）。
+        normalizeWaterDistricts(mapData);
         if (mapData.binOriginalData != null) {
             // 世界地形 BIN：保留头 16 字节与地形之后的省规划段，仅原地更新截取区域的地形
             byte[] bin = mapData.binOriginalData.clone();
@@ -1744,6 +1879,8 @@ public class FileParser {
 
         if (!h.independentTerrain) {
             resizeSubmap(m, h, newCols, newRows, newTotal, map, oldToNew, cols, n, dir, expand);
+            // 扩充出来的海洋格省规划必须同步为 0xFFFF
+            normalizeWaterDistricts(m);
             return;
         }
 
@@ -1768,6 +1905,8 @@ public class FileParser {
         byte[] rebuilt = rebuildBtl(m, h, newTiles, newProv, newBelong, oldToNew,
                 newCols, newRows, newTotal, true);
         replaceWith(m, rebuilt);
+        // 扩充出来的海洋格（或改过的地形）省规划同步为 0xFFFF
+        normalizeWaterDistricts(m);
     }
 
     /** 重建整份 BTL（战役：地形内嵌；内容坐标按映射重排）。 */

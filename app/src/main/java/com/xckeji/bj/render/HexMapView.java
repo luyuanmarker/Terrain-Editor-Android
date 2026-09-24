@@ -17,6 +17,7 @@ import android.view.View;
 import com.xckeji.bj.model.MapData;
 import com.xckeji.bj.model.TerrainColors;
 import com.xckeji.bj.model.TerrainTile;
+import com.xckeji.bj.file.FileParser;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -1660,6 +1661,8 @@ public class HexMapView extends View {
         }
         // 涂地后处理被涂格子：陆地按位置选真实变体，避免整块矩形纯色贴图
         mapData.finishPaint(cellsToPaint);
+        // 涂出来的海洋格，省规划跟着改成 0xFFFF（与官方编辑器一致）
+        FileParser.normalizeWaterDistricts(mapData);
         selectedX = x; selectedY = y;
         invalidate();
         if (listener != null) listener.onTileSelected(x,y,mapData.getTile(x,y));
