@@ -466,7 +466,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         root.addView(bar);
 
         TextView hint = new TextView(this);
-        hint.setText("点最左列「军团N」选中行（整行变蓝）· 点单元格改值 · 国家ID/国家颜色 有专门选择器 · 列名与熊编辑器一致");
+        hint.setText("点最左列「军团N」选中行（整行变蓝）· 点单元格改值 · 国家/颜色 有专门选择器");
         hint.setTextSize(10);
         hint.setTextColor(0xFF9ca3af);
         hint.setPadding(2, 6, 2, 6);
@@ -566,6 +566,9 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
     }
 
     private TextView nationCell(String text, int width, int bg, boolean bold, String type, int off) {
+        // 表头显示名与熊编辑器一致：国家ID 显示为「国家」，国家颜色 显示为「颜色」
+        if (bold && off == 0x4) text = "国家";
+        else if (bold && off == 0x28) text = "颜色";
         TextView tv = new TextView(this);
         tv.setText(text);
         tv.setTextSize(11);
@@ -630,61 +633,76 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
                 }).show();
     }
 
-    /** 颜色选择：内置调色板 + 手动输入 HEX。 */
-    private void showColorPicker(int current, final java.util.function.IntConsumer onPick) {
-        final int[] palette = {
-                0xFFe53935, 0xFFd81b60, 0xFF8e24aa, 0xFF5e35b1, 0xFF3949ab, 0xFF1e88e5,
-                0xFF039be5, 0xFF00acc1, 0xFF00897b, 0xFF43a047, 0xFF7cb342, 0xFFc0ca33,
-                0xFFfdd835, 0xFFFFb300, 0xFFfb8c00, 0xFFf4511e, 0xFF6d4c41, 0xFF757575,
-                0xFF546e7a, 0xFFe0e0e0, 0xFFfafa96, 0xFF96aaaa, 0xFF4e342e, 0xFFFFFFFF,
-        };
-        final int density = (int) getResources().getDisplayMetrics().density;
-        LinearLayout grid = new LinearLayout(this);
-        grid.setOrientation(LinearLayout.VERTICAL);
-        grid.setPadding(12, 12, 12, 12);
-        LinearLayout rowBox = null;
-        for (int i = 0; i < palette.length; i++) {
-            if (i % 6 == 0) {
-                rowBox = new LinearLayout(this);
-                rowBox.setOrientation(LinearLayout.HORIZONTAL);
-                grid.addView(rowBox);
+    /** 国家颜色常用色板（48 色）：点一下立即生效，不需要输入。 */
+    private static final int[] NATION_COLOR_PALETTE = {
+            0xFFe53935, 0xFFd81b60, 0xFFc2185b, 0xFF8e24aa, 0xFF5e35b1, 0xFF3949ab,
+            0xFF1e88e5, 0xFF039be5, 0xFF00acc1, 0xFF00897b, 0xFF43a047, 0xFF2e7d32,
+            0xFF7cb342, 0xFF9ccc65, 0xFFc0ca33, 0xFFfdd835, 0xFFFFb300, 0xFFFF8f00,
+            0xFFfb8c00, 0xFFf4511e, 0xFFd84315, 0xFF6d4c41, 0xFF795548, 0xFF8d6e63,
+            0xFF9e9e9e, 0xFF757575, 0xFF546e7a, 0xFF607d8b, 0xFFb0bec5, 0xFFe0e0e0,
+            0xFFf5f5f5, 0xFFFFFFFF, 0xFF111111, 0xFF000000, 0xFFfafa96, 0xFF96aaaa,
+            0xFF4e342e, 0xFF3e2723, 0xFF00695c, 0xFF004d40, 0xFF283593, 0xFF1a237e,
+            0xFF6a1b9a, 0xFF4a148c, 0xFF880e4f, 0xFFb71c1c, 0xFF8d6e63, 0xFF263238,
+    };
+
+    /**
+     * 颜色选择：直接点色块即选用（不再有输入框，避免输入法/嵌套弹窗导致的闪退）。
+     * 当前颜色用白框标出；点色块立即回调并关闭弹窗。
+     */
+    private void showColorPicker(final int current, final java.util.function.IntConsumer onPick) {
+        if (isFinishing()) return;
+        try {
+            final float dp = getResources().getDisplayMetrics().density;
+            final int size = (int) (36 * dp);
+            final int gap = (int) (5 * dp);
+            final LinearLayout grid = new LinearLayout(this);
+            grid.setOrientation(LinearLayout.VERTICAL);
+            grid.setPadding(gap, gap, gap, gap);
+            final AlertDialog[] holder = new AlertDialog[1];
+            LinearLayout curRow = null;
+            for (int i = 0; i < NATION_COLOR_PALETTE.length; i++) {
+                if (i % 6 == 0) {
+                    curRow = new LinearLayout(this);
+                    curRow.setOrientation(LinearLayout.HORIZONTAL);
+                    grid.addView(curRow);
+                }
+                final int color = NATION_COLOR_PALETTE[i];
+                final View cell = new View(this);
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(size, size);
+                lp.setMargins(gap / 2, gap / 2, gap / 2, gap / 2);
+                cell.setLayoutParams(lp);
+                cell.setBackground(colorSwatchBg(color, (color & 0xFFFFFF) == (current & 0xFFFFFF), dp));
+                cell.setClickable(true);
+                cell.setOnClickListener(v -> {
+                    onPick.accept(color);
+                    if (holder[0] != null) holder[0].dismiss();
+                });
+                if (curRow != null) curRow.addView(cell);
             }
-            final int color = palette[i];
-            View sw = new View(this);
-            sw.setBackgroundColor(color);
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(48 * density, 40 * density);
-            lp.setMargins(4, 4, 4, 4);
-            sw.setLayoutParams(lp);
-            sw.setClickable(true);
-            if (rowBox != null) rowBox.addView(sw);
+            TextView tip = new TextView(this);
+            tip.setText("当前 #" + String.format("%06X", current & 0xFFFFFF) + "　（点色块直接选用）");
+            tip.setTextSize(12);
+            tip.setTextColor(0xFF9ca3af);
+            tip.setPadding(2, (int) (8 * dp), 2, 2);
+            grid.addView(tip);
+            holder[0] = new AlertDialog.Builder(this, R.style.DarkDialog)
+                    .setTitle("选择国家颜色")
+                    .setView(grid)
+                    .setNegativeButton("取消", null)
+                    .create();
+            holder[0].show();
+        } catch (Exception e) {
+            Toast.makeText(this, "颜色选择器打开失败：" + e.getMessage(), Toast.LENGTH_SHORT).show();
         }
-        final EditText et = new EditText(this);
-        et.setHint("或输入 HEX，如 fafa96");
-        et.setText(String.format("%06X", current & 0xFFFFFF));
-        et.setTextColor(0xFFe5e7eb);
-        grid.addView(et);
-        final AlertDialog dlg = new AlertDialog.Builder(this, R.style.DarkDialog)
-                .setTitle("选择国家颜色（当前 #" + String.format("%06X", current & 0xFFFFFF) + "）")
-                .setView(grid)
-                .setNegativeButton("取消", null)
-                .setPositiveButton("确定", (d, w) -> {
-                    try {
-                        String s = et.getText().toString().trim().replace("#", "");
-                        int rgb = (int) Long.parseLong(s, 16);
-                        onPick.accept(0xFF000000 | (rgb & 0xFFFFFF));
-                    } catch (Exception e) {
-                        Toast.makeText(this, "HEX 无效", Toast.LENGTH_SHORT).show();
-                    }
-                }).create();
-        dlg.show();
-        for (int i = 0; i < palette.length; i++) {
-            final int color = palette[i];
-            View sw = ((LinearLayout) ((LinearLayout) grid.getChildAt(i / 6)).getChildAt(i % 6));
-            sw.setOnClickListener(v -> {
-                onPick.accept(color);
-                dlg.dismiss();
-            });
-        }
+    }
+
+    /** 色块背景：圆角 + 描边，选中色用白框。 */
+    private android.graphics.drawable.Drawable colorSwatchBg(int color, boolean selected, float dp) {
+        android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable();
+        g.setColor(0xFF000000 | (color & 0xFFFFFF));
+        g.setCornerRadius(7 * dp);
+        g.setStroke((int) (selected ? 3 * dp : dp), selected ? 0xFFFFFFFF : 0x66FFFFFF);
+        return g;
     }
 
     /** 批量编辑：选一个字段 → 填值 → 应用到所有军团。 */
@@ -3083,9 +3101,36 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         buildHomeOverlay();
     }
 
+    /** 关于页文字（占位内容，后续要改成正式页面时直接改这里）。 */
+    private static final String ABOUT_TEXT =
+            "Terrain Editor · WC4 地形编辑器（非官方）\n\n"
+          + "手机端的《世界征服者4》地图编辑器：直接读取、修改、保存游戏里的 .btl / .bin 地图文件，"
+          + "涂地形、放城市建筑、编兵种与军团、划省区、扩展或截取地图，改完导出即可放回游戏使用。\n\n"
+          + "【五个入口】\n"
+          + "· 打开战役 stage：编辑自带地形的战役关卡（地图序号 0 的 .btl）\n"
+          + "· 打开征服：编辑 conquest{N}.btl 的截取窗口 + world{N}.bin 底图\n"
+          + "· 新建战役：按 3~200 的宽高从官方模板生成一张空白战役\n"
+          + "· 打开地图：单独编辑 world.bin / mapN.bin 底图\n"
+          + "· BTL战役库：在线下载、上传分享地图，含已下载管理\n\n"
+          + "【能做什么】\n"
+          + "· 地形：笔刷涂色 + 官方海岸线算法自动补波浪，随机地形\n"
+          + "· 建筑城市：类型 / 外观 / 等级 / 奖励 / 归属，新放城市自动成为新省区\n"
+          + "· 兵种军团：精英部队、等级编制将领技能、地雷、援军与事件\n"
+          + "· 省区规划：取省、刷省、省区编号视图\n"
+          + "· 地图尺寸：按官方规则扩展 / 收缩、截取窗口、生成 world.bin\n"
+          + "· 校验修复：一键按官方规则修正海洋区划、地块总数、军团排序等\n\n"
+          + "【文件放哪】\n"
+          + "战役：游戏 bin/ 目录下的 stage*.btl\n"
+          + "征服：conquest{N}.btl + world{N}.bin（同目录）\n\n"
+          + "交流群（QQ）：1001026138　进群获取新版本、素材与教程\n"
+          + "GitHub：https://github.com/luyuanmarker/Terrain-Editor-Android\n"
+          + "作者：AC小辰 · 小辰科技官方\n\n"
+          + "本工具为非官方第三方作品，与 EasyTech 无任何关联；"
+          + "请勿用于商业用途或侵犯他人权益的行为，使用风险自负。";
+
     /**
      * 首页：assets/background.jpg 平铺当背景（按屏宽等比缩放成一条后整屏重复铺贴）
-     * + 左侧竖排 5 个灰色渐变按钮。尺寸全部按屏幕宽高的比例算并夹在合理区间内，
+     * + 左侧竖排 5 个灰色渐变按钮 + 右下角「关于」。尺寸全部按屏幕宽高的比例算并夹在合理区间内，
      * 横屏/小屏也放得下（超长时按钮列可上下滚动）。
      */
     private void buildHomeOverlay() {
@@ -3165,7 +3210,76 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
             col.addView(btn);
         }
 
+        // 右下角：小号「关于」按钮（蓝色渐变）
+        Button aboutBtn = new Button(this);
+        aboutBtn.setText("关于");
+        aboutBtn.setTextColor(Color.WHITE);
+        aboutBtn.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, btnH * 0.30f);
+        aboutBtn.setAllCaps(false);
+        aboutBtn.setTypeface(null, android.graphics.Typeface.BOLD);
+        aboutBtn.setShadowLayer(4f, 0f, 1f, 0x99000000);
+        aboutBtn.setPadding((int) (6 * dp), 0, (int) (6 * dp), 0);
+        aboutBtn.setBackground(aboutButtonBackground(dp));
+        FrameLayout.LayoutParams aboutLp = new FrameLayout.LayoutParams(
+                (int) (78 * dp), (int) (40 * dp), Gravity.RIGHT | Gravity.BOTTOM);
+        aboutLp.rightMargin = (int) (14 * dp);
+        aboutLp.bottomMargin = (int) (14 * dp);
+        aboutBtn.setOnClickListener(v -> showAboutPage());
+        homeOverlay.addView(aboutBtn, aboutLp);
+
         rootFrame.addView(homeOverlay);
+    }
+
+    /** 「关于」按钮背景：蓝色渐变 + 圆角（比主按钮小一号）。 */
+    private android.graphics.drawable.Drawable aboutButtonBackground(float dp) {
+        android.graphics.drawable.GradientDrawable normal = new android.graphics.drawable.GradientDrawable(
+                android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{0xFF60a5fa, 0xFF1d4ed8});
+        normal.setCornerRadius(12 * dp);
+        normal.setStroke((int) (1.5f * dp), 0x66FFFFFF);
+        android.graphics.drawable.GradientDrawable pressed = new android.graphics.drawable.GradientDrawable(
+                android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{0xFF3b82f6, 0xFF1e3a8a});
+        pressed.setCornerRadius(12 * dp);
+        pressed.setStroke((int) (1.5f * dp), 0x66FFFFFF);
+        android.graphics.drawable.StateListDrawable sd = new android.graphics.drawable.StateListDrawable();
+        sd.addState(new int[]{android.R.attr.state_pressed}, pressed);
+        sd.addState(new int[]{android.R.attr.state_enabled}, normal);
+        sd.addState(new int[]{}, normal);
+        return sd;
+    }
+
+    /** 关于页（占位，后续可换成正式页面）：目前用文字介绍编辑器 + GitHub + 交流群。 */
+    private void showAboutPage() {
+        if (homeOverlay == null) return;
+        final float dp = getResources().getDisplayMetrics().density;
+        final FrameLayout page = new FrameLayout(this);
+        page.setLayoutParams(new FrameLayout.LayoutParams(-1, -1));
+        page.setBackgroundColor(0xF00B0B10);
+
+        ScrollView sv = new ScrollView(this);
+        TextView tv = new TextView(this);
+        tv.setText(ABOUT_TEXT);
+        tv.setTextSize(14);
+        tv.setTextColor(0xFFe5e7eb);
+        tv.setLineSpacing(4f, 1.15f);
+        tv.setPadding((int) (20 * dp), (int) (24 * dp), (int) (20 * dp), (int) (80 * dp));
+        sv.addView(tv);
+        page.addView(sv, new FrameLayout.LayoutParams(-1, -1));
+
+        Button back = new Button(this);
+        back.setText("返回");
+        back.setTextColor(Color.WHITE);
+        back.setAllCaps(false);
+        back.setBackground(aboutButtonBackground(dp));
+        FrameLayout.LayoutParams blp = new FrameLayout.LayoutParams(
+                (int) (78 * dp), (int) (40 * dp), Gravity.RIGHT | Gravity.BOTTOM);
+        blp.rightMargin = (int) (14 * dp);
+        blp.bottomMargin = (int) (14 * dp);
+        back.setOnClickListener(v -> homeOverlay.removeView(page));
+        page.addView(back, blp);
+
+        homeOverlay.addView(page, new FrameLayout.LayoutParams(-1, -1));
     }
 
     private static int clampInt(int v, int lo, int hi) {
@@ -3534,7 +3648,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         acts.add(() -> validateAndFixDialog());
         acts.add(() -> generateWorldBinNow());
         acts.add(() -> shrinkMapDialog());
-        acts.add(() -> showExpandDirectionDialog());
+        acts.add(() -> showExpandMapDialog());
         acts.add(() -> startCropSelect());
         acts.add(() -> randomizeTerrainDialog());
         acts.add(() -> randomizeArmiesDialog());
@@ -4620,18 +4734,73 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
     }
 
     // ===== 顶部“扩展”按钮：四个方向 =====
-    /** 扩展地图（完全按枭雄的 WASD 规则）：选方向 → 输距离 → 选填充地形。 */
-    private void showExpandDirectionDialog() {
+    /**
+     * 扩展地图（恢复原来的流程）：一个弹窗里选方向 + 行数/列数 + 填充海洋 / 填充陆地（平原）。
+     * 扩展本身仍按枭雄规则执行（内容坐标整体平移、省规划与归属重映射）。
+     */
+    private void showExpandMapDialog() {
         if (mapData == null) {
             Toast.makeText(this, "请先加载地图", Toast.LENGTH_SHORT).show();
             return;
         }
-        final String[] dirs = {"向上扩展（W）", "向下扩展（S）", "向左扩展（A）", "向右扩展（D）"};
+        final float dp = getResources().getDisplayMetrics().density;
+        LinearLayout l = new LinearLayout(this);
+        l.setOrientation(LinearLayout.VERTICAL);
+        l.setPadding((int) (22 * dp), (int) (12 * dp), (int) (22 * dp), (int) (12 * dp));
+
+        final RadioGroup dirGroup = new RadioGroup(this);
+        final String[] dirs = {"向上扩展", "向下扩展", "向左扩展", "向右扩展"};
         final String[] codes = {"up", "down", "left", "right"};
+        final RadioButton[] dirBtns = new RadioButton[4];
+        for (int i = 0; i < 4; i++) {
+            dirBtns[i] = new RadioButton(this);
+            dirBtns[i].setText(dirs[i]);
+            dirBtns[i].setId(i + 1);        // 1=向上 2=向下 3=向左 4=向右
+            dirBtns[i].setTextColor(0xFFe5e7eb);
+            if (i == 0) dirBtns[i].setChecked(true);
+            dirGroup.addView(dirBtns[i]);
+        }
+        l.addView(dirGroup);
+
+        final EditText et = new EditText(this);
+        et.setHint("扩展行数（1~50）");
+        et.setInputType(InputType.TYPE_CLASS_NUMBER);
+        et.setText("1");
+        et.setTextColor(0xFFe5e7eb);
+        l.addView(et);
+        dirGroup.setOnCheckedChangeListener((g, checkedId) ->
+                et.setHint(checkedId <= 2 ? "扩展行数（1~50）" : "扩展列数（1~50）"));
+
+        final Spinner fillSpinner = new Spinner(this);
+        ArrayAdapter<String> fillAdapter = new ArrayAdapter<>(this,
+                android.R.layout.simple_spinner_item,
+                new String[]{"填充海洋", "填充陆地（平原）"});
+        fillAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        fillSpinner.setAdapter(fillAdapter);
+        l.addView(fillSpinner);
+
         new AlertDialog.Builder(this, R.style.DarkDialog)
                 .setTitle("扩展地图（当前 " + mapData.width + "×" + mapData.height + "）")
-                .setItems(dirs, (d, which) -> resizeAskDistance(codes[which], true))
+                .setView(l)
                 .setNegativeButton("取消", null)
+                .setPositiveButton("扩展", (d, w) -> {
+                    int dir = 0;
+                    int checkedId = dirGroup.getCheckedRadioButtonId();
+                    for (int i = 0; i < 4; i++) if (dirBtns[i].getId() == checkedId) dir = i;
+                    int n;
+                    try {
+                        n = Integer.parseInt(et.getText().toString().trim());
+                    } catch (Exception e) {
+                        n = 0;
+                    }
+                    if (n <= 0) {
+                        Toast.makeText(this, "数量必须是正整数", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    boolean sea = fillSpinner.getSelectedItemPosition() == 0;
+                    // 海洋：地形组1/编号0；陆地：标准平原 组0/编号255（与游戏内平原格一致）
+                    doResizeMap(codes[dir], n, true, sea ? 1 : 0, sea ? 0 : 0xFF);
+                })
                 .show();
     }
 
@@ -4650,7 +4819,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
                 .show();
     }
 
-    /** 输入距离（行数/列数），扩展时继续让用户选填充地形。 */
+    /** 收缩地图：输入要去掉的行数/列数（扩展走 showExpandMapDialog，自己带填充选择）。 */
     private void resizeAskDistance(final String dir, final boolean expand) {
         final boolean vertical = dir.equals("up") || dir.equals("down");
         final EditText et = new EditText(this);
@@ -4658,7 +4827,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         et.setText("1");
         et.setTextColor(0xFFe5e7eb);
         new AlertDialog.Builder(this, R.style.DarkDialog)
-                .setTitle("请输入要" + (expand ? "扩展" : "收缩") + "的" + (vertical ? "行数" : "列数"))
+                .setTitle("请输入要收缩的" + (vertical ? "行数" : "列数"))
                 .setView(et)
                 .setNegativeButton("取消", null)
                 .setPositiveButton("确定", (d, w) -> {
@@ -4672,29 +4841,8 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
                         Toast.makeText(this, "数量必须是正整数", Toast.LENGTH_SHORT).show();
                         return;
                     }
-                    if (expand) resizePickFillTerrain(dir, n);
-                    else doResizeMap(dir, n, false, 1, 0);
+                    doResizeMap(dir, n, false, 1, 0);
                 }).show();
-    }
-
-    /** 扩展时选填充地形：一级选地形组，二级选装饰变体（默认海洋 1/0，与枭雄一致）。 */
-    private void resizePickFillTerrain(final String dir, final int n) {
-        final String[] names = new String[32];
-        for (int g = 0; g < 32; g++) names[g] = g + "　" + com.xckeji.bj.model.TerrainColors.getName(g);
-        new AlertDialog.Builder(this, R.style.DarkDialog)
-                .setTitle("选择填充地形（新增地块用什么）")
-                .setItems(names, (d, group) -> {
-                    final int variants = 9;
-                    String[] vs = new String[variants];
-                    for (int i = 0; i < variants; i++) vs[i] = "装饰变体 " + (i + 1);
-                    new AlertDialog.Builder(this, R.style.DarkDialog)
-                            .setTitle("地形组 " + group + "　选择装饰变体")
-                            .setItems(vs, (dd, vv) -> doResizeMap(dir, n, true, group, vv + 1))
-                            .setNegativeButton("取消", null)
-                            .show();
-                })
-                .setNegativeButton("取消", null)
-                .show();
     }
 
     private void doResizeMap(String dir, int n, boolean expand, int fillGid, int fillTid) {
