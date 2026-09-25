@@ -399,15 +399,16 @@ public class HexMapView extends View {
         if (mapData == null) return null;
         float oldScale = scale;
         float oldOx = offsetX, oldOy = offsetY;
-        scale = 1f;
-        offsetX = 0;
-        offsetY = 0;
+       scale = 1f;
+        // 留一格边距：位图左上角对应地图坐标 (-s,-s)，否则贴到屏幕上会整体偏一格
+        offsetX = 20f;
+        offsetY = 20f;
         hexTileCache.clear();
         cachedHexSize = -1f;
         try {
             float s = hs();
-            int W = (int) Math.ceil(s * 1.5f * mapData.width + s);
-            int H = (int) Math.ceil(s * (float) Math.sqrt(3) * (mapData.height + 0.5f));
+            int W = (int) Math.ceil(s * 1.5f * (mapData.width - 1) + 2f * s);
+            int H = (int) Math.ceil(s * (float) Math.sqrt(3) * (mapData.height - 0.5f) + 2f * s);
             Bitmap bmp = Bitmap.createBitmap(Math.max(W, 1), Math.max(H, 1), Bitmap.Config.ARGB_8888);
             Canvas c = new Canvas(bmp);
             c.drawColor(0xFFe8ecef);
@@ -453,14 +454,15 @@ public class HexMapView extends View {
         float oldScale = scale;
         float oldOx = offsetX, oldOy = offsetY;
         scale = 1f;
-        offsetX = 0;
-        offsetY = 0;
+        // 与 rebuildFullMap 一致：留一格边距，保证缓存位图与 overlay 的六边形坐标严格对齐
+        offsetX = 20f;
+        offsetY = 20f;
         hexTileCache.clear();
         cachedHexSize = -1f;
         try {
             float s = hs();
-            int W = (int) Math.ceil(s * 1.5f * mapData.width + s);
-            int H = (int) Math.ceil(s * (float) Math.sqrt(3) * (mapData.height + 0.5f));
+            int W = (int) Math.ceil(s * 1.5f * (mapData.width - 1) + 2f * s);
+            int H = (int) Math.ceil(s * (float) Math.sqrt(3) * (mapData.height - 0.5f) + 2f * s);
             if (W <= 0 || H <= 0) return;
             fullMapCache = Bitmap.createBitmap(Math.max(W, 1), Math.max(H, 1), Bitmap.Config.ARGB_8888);
             Canvas c = new Canvas(fullMapCache);
@@ -1137,8 +1139,11 @@ public class HexMapView extends View {
             }
             if (fullMapCache != null) {
                 float s = hs();
-                float W = s * 1.5f * mapData.width + s;
-                float H = s * (float) Math.sqrt(3) * (mapData.height + 0.5f);
+                // 位图按基准比例(20px)绘制，这里按当前缩放等比拉到屏幕上：
+                // 左边缘 = hcx(0) - s，正好对应位图里的 -s 边距，因此 overlay 与地形严格重合
+                float k = s / 20f;
+                float W = fullMapCache.getWidth() * k;
+                float H = fullMapCache.getHeight() * k;
                 canvas.drawBitmap(fullMapCache, null,
                         new RectF(offsetX - s, offsetY - s, offsetX - s + W, offsetY - s + H),
                         bitmapPaint);
@@ -1356,59 +1361,8 @@ public class HexMapView extends View {
             }
         }
 
-        // 兵种标记（覆盖在建筑之上）：军团色圆标 + 等级 + 名称
-        if (mapData.armies != null) {
-            for (MapData.Army a : mapData.armies) {
-                if (a == null) continue;
-                float px = hcx(a.x), py = hcy(a.x, a.y), s = hs();
-                if (px + s < 0 || px - s > getWidth() || py + s < 0 || py - s > getHeight()) continue;
-                int idx = a.y * mapData.width + a.x;
-                int legion = (mapData.belongs != null && idx >= 0 && idx < mapData.belongs.length)
-                        ? (mapData.belongs[idx] & 0xFF) : 0xFF;
-                int color = 0xFF374151;
-                if (legion != 0xFF && legion >= 0 && legion < mapData.legionColors.length) {
-                    color = mapData.legionColors[legion];
-                }
-                // 图标按兵种代码对应 legion_icon_N.png；兵种39=城市，用城市建筑图标
-                Bitmap legionIcon = null;
-                if (a.type == 39) {
-                    if (buildingBmps != null) {
-                        legionIcon = buildingBmps.get(13);
-                        if (legionIcon == null) legionIcon = buildingBmps.get(11);
-                    }
-                } else if (legionBmps != null) {
-                    legionIcon = armyIcon(a.type);
-                }
-                float r = Math.max(4f, s * 0.38f);
-                float iconSize = Math.max(10f, s * 1.3f);
-                if (legionIcon != null) {
-                    canvas.drawBitmap(legionIcon, null,
-                            new RectF(px - iconSize / 2f, py - iconSize / 2f,
-                                    px + iconSize / 2f, py + iconSize / 2f), bitmapPaint);
-                } else {
-                    // 无军团图标时回退为军团色圆
-                    Paint unitPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-                    unitPaint.setColor(color);
-                    canvas.drawCircle(px, py, r, unitPaint);
-                    unitPaint.setStyle(Paint.Style.STROKE);
-                    unitPaint.setStrokeWidth(Math.max(1f, s * 0.08f));
-                    unitPaint.setColor(0xFFFFFFFF);
-                    canvas.drawCircle(px, py, r, unitPaint);
-                }
-                // 右下角：国旗 + 编制黑底块（仿枭雄；国旗可单独关）
-                if (showFlags) drawFlagAndFormation(canvas, a, px, py, iconSize, s, legion);
-                // 将领头像（仿枭雄 general 层）
-                if (showGenerals) drawGeneralPortrait(canvas, a, px, py, s);
-                // 关联高亮：同编制单位描黄圈
-                if (hlFormation >= 0 && armyFormation(a) == hlFormation) {
-                    Paint ring = new Paint(Paint.ANTI_ALIAS_FLAG);
-                    ring.setStyle(Paint.Style.STROKE);
-                    ring.setStrokeWidth(Math.max(2f, s * 0.1f));
-                    ring.setColor(0xFFfbbf24);
-                    canvas.drawCircle(px, py, iconSize * 0.62f, ring);
-                }
-            }
-        }
+        // 兵种标记：统一走 drawArmyMarkers，才会跟随「显示设置 → 兵种」开关（放大时也要能隐藏）
+        drawArmyMarkers(canvas);
 
         // 地雷/陷阱标记（整图缓存模式以外逐帧绘制）
         drawTraps(canvas);

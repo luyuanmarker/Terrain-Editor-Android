@@ -203,8 +203,39 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
     private int pendingArmyLegion = -1;
     private long lastBrushHistorySave = 0;  // 笔刷连续涂抹时按时间节流快照
 
-    private static final int[] LAND_TYPES = {1,2,3,4,5,6,7,8,9,10,11,12,13,14};
-    private static final int[] NAVAL_TYPES = {15,16,17,18,19};
+    /**
+     * 随机兵力用的兵种池：按 Armysettings.json 的 Type 分（1 步兵 / 2 装甲 / 3 火炮 = 陆地，
+     * 4 舰船 + 名字带“海上”的堡垒 = 海军）。不再写死 15~19，避免版本不同造成“陆地上放船”。
+     */
+    private static java.util.List<Integer> landArmyPool() {
+        java.util.List<Integer> pool = new java.util.ArrayList<>();
+        for (ArmyConfig c : ArmyConfig.ALL) {
+            if (c.army <= 0) continue;
+            if (isNavalConfig(c)) continue;
+            if (c.type == 1 || c.type == 2 || c.type == 3 || c.type == 8 || c.type == 12) {
+                if (!pool.contains(c.army)) pool.add(c.army);
+            }
+        }
+        if (pool.isEmpty()) pool.add(1);
+        return pool;
+    }
+
+    private static java.util.List<Integer> navalArmyPool() {
+        java.util.List<Integer> pool = new java.util.ArrayList<>();
+        for (ArmyConfig c : ArmyConfig.ALL) {
+            if (c.army <= 0 || !isNavalConfig(c)) continue;
+            if (!pool.contains(c.army)) pool.add(c.army);
+        }
+        if (pool.isEmpty()) pool.add(15);
+        return pool;
+    }
+
+    /** 是否海军单位：Type=4 舰船，以及“海上堡垒”这类堡垒。 */
+    private static boolean isNavalConfig(ArmyConfig c) {
+        if (c == null) return false;
+        if (c.type == 4) return true;
+        return c.type == 12 && c.name != null && c.name.contains("海上");
+    }
 
     /** 兵种48 记录字段：名称 / 类型 / 偏移（与 BTL 兵种段一致）。 */
     private static final String[][] ARMY_FIELDS = {
@@ -653,7 +684,12 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         if (isFinishing()) return;
         try {
             final float dp = getResources().getDisplayMetrics().density;
-            final int size = (int) (36 * dp);
+            final int screenW = getResources().getDisplayMetrics().widthPixels;
+            final int screenH = getResources().getDisplayMetrics().heightPixels;
+            final int cols = 8;   // 48 色排成 6 行，横屏也能一屏看全
+            // 色块按屏幕宽度自适应（留出对话框边距），最小 24dp，避免右侧被裁掉
+            final int size = (int) Math.max(24 * dp,
+                    Math.min(40 * dp, (screenW * 0.86f - cols * 6 * dp) / cols));
             final int gap = (int) (5 * dp);
             final LinearLayout grid = new LinearLayout(this);
             grid.setOrientation(LinearLayout.VERTICAL);
@@ -661,7 +697,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
             final AlertDialog[] holder = new AlertDialog[1];
             LinearLayout curRow = null;
             for (int i = 0; i < NATION_COLOR_PALETTE.length; i++) {
-                if (i % 6 == 0) {
+                if (i % cols == 0) {
                     curRow = new LinearLayout(this);
                     curRow.setOrientation(LinearLayout.HORIZONTAL);
                     grid.addView(curRow);
@@ -685,9 +721,18 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
             tip.setTextColor(0xFF9ca3af);
             tip.setPadding(2, (int) (8 * dp), 2, 2);
             grid.addView(tip);
+            // 关键：套一层可滚动容器，并按屏幕高度限高，避免底部几行颜色被对话框裁掉、又划不动
+            android.widget.ScrollView sv = new android.widget.ScrollView(this);
+            sv.addView(grid);
+            int maxH = (int) (screenH * 0.72f);
+            int rows = (NATION_COLOR_PALETTE.length + cols - 1) / cols;
+            int needH = rows * (size + gap) + (int) (40 * dp);
+            sv.setLayoutParams(new android.widget.LinearLayout.LayoutParams(
+                    android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                    Math.min(maxH, needH)));
             holder[0] = new AlertDialog.Builder(this, R.style.DarkDialog)
                     .setTitle("选择国家颜色")
-                    .setView(grid)
+                    .setView(sv)
                     .setNegativeButton("取消", null)
                     .create();
             holder[0].show();
@@ -3256,6 +3301,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         final FrameLayout page = new FrameLayout(this);
         page.setLayoutParams(new FrameLayout.LayoutParams(-1, -1));
         page.setBackgroundColor(0xF00B0B10);
+        page.setClickable(true);          // 吃掉点击，避免穿透到首页按钮
 
         ScrollView sv = new ScrollView(this);
         TextView tv = new TextView(this);
@@ -3263,9 +3309,22 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         tv.setTextSize(14);
         tv.setTextColor(0xFFe5e7eb);
         tv.setLineSpacing(4f, 1.15f);
-        tv.setPadding((int) (20 * dp), (int) (24 * dp), (int) (20 * dp), (int) (80 * dp));
+        tv.setPadding((int) (20 * dp), (int) (72 * dp), (int) (20 * dp), (int) (80 * dp));
         sv.addView(tv);
         page.addView(sv, new FrameLayout.LayoutParams(-1, -1));
+
+        // 顶部左上角返回（放底部容易被系统导航条/手势条挡住点不到）
+        Button backTop = new Button(this);
+        backTop.setText("← 返回");
+        backTop.setTextColor(Color.WHITE);
+        backTop.setAllCaps(false);
+        backTop.setBackground(aboutButtonBackground(dp));
+        FrameLayout.LayoutParams tlp = new FrameLayout.LayoutParams(
+                (int) (96 * dp), (int) (42 * dp), Gravity.LEFT | Gravity.TOP);
+        tlp.leftMargin = (int) (14 * dp);
+        tlp.topMargin = (int) (14 * dp);
+        backTop.setOnClickListener(v -> closeAboutPage());
+        page.addView(backTop, tlp);
 
         Button back = new Button(this);
         back.setText("返回");
@@ -3276,10 +3335,27 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
                 (int) (78 * dp), (int) (40 * dp), Gravity.RIGHT | Gravity.BOTTOM);
         blp.rightMargin = (int) (14 * dp);
         blp.bottomMargin = (int) (14 * dp);
-        back.setOnClickListener(v -> homeOverlay.removeView(page));
+        back.setOnClickListener(v -> closeAboutPage());
         page.addView(back, blp);
 
+        aboutPageView = page;
         homeOverlay.addView(page, new FrameLayout.LayoutParams(-1, -1));
+    }
+
+    /** 关于页引用（用于返回 / 系统返回键关闭）。 */
+    private View aboutPageView;
+
+    private void closeAboutPage() {
+        if (aboutPageView != null && aboutPageView.getParent() instanceof ViewGroup) {
+            ((ViewGroup) aboutPageView.getParent()).removeView(aboutPageView);
+        }
+        aboutPageView = null;
+    }
+
+    @Override
+    public void onBackPressed() {
+        if (aboutPageView != null) { closeAboutPage(); return; }   // 关于页：返回键先关它
+        super.onBackPressed();
     }
 
     private static int clampInt(int v, int lo, int hi) {
@@ -4701,15 +4777,21 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         // 2. 按比例取前 N 个：100=全部，70=七成
         int count = (int) Math.round(ratio * candidates.size());
         java.util.Collections.shuffle(candidates, rng);
+        java.util.List<Integer> landPool = landArmyPool();
+        java.util.List<Integer> navalPool = navalArmyPool();
         int placed = 0;
         for (int i = 0; i < count; i++) {
             int[] c = candidates.get(i);
             int x = c[0], y = c[1], legion = c[2];
             int idx = y * mapData.width + x;
+            if (idx < 0 || idx >= mapData.tiles.size()) continue;
             boolean sea = mapData.tiles.get(idx).bmTerrain1Group == 1;
-            int[] pool = sea ? NAVAL_TYPES : LAND_TYPES;
-            ArmyConfig cfg = ArmyConfig.byArmy(pool[rng.nextInt(pool.length)]);
+            // 海军只放“真正的水域”：周围一个水格都没有的孤岛水塘放过（放上去看着就像船在陆地上）
+            if (sea && waterNeighborCount(x, y) < 1) continue;
+            java.util.List<Integer> pool = sea ? navalPool : landPool;
+            ArmyConfig cfg = ArmyConfig.byArmy(pool.get(rng.nextInt(pool.size())));
             if (cfg == null) continue;
+            if (isNavalConfig(cfg) != sea) continue;   // 最后一道保险：船绝不上岸
             byte[] raw = buildNewArmyRaw(x, y, cfg);
             try {
                 history.save(mapData, "随机兵力");
@@ -4722,6 +4804,38 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         updateInfo();
         Toast.makeText(this, "已放置 " + placed + "/" + candidates.size() + " 个可用地块",
                 Toast.LENGTH_LONG).show();
+    }
+
+    /** 放兵合法性：海军只能在海洋格，其余只能在陆地格；不合法时提示并拒绝。 */
+    private boolean canPlaceArmyHere(ArmyConfig cfg, int x, int y) {
+        TerrainTile t = mapData == null ? null : mapData.getTile(x, y);
+        if (t == null) return false;
+        boolean sea = t.bmTerrain1Group == 1;
+        if (isNavalConfig(cfg) && !sea) {
+            Toast.makeText(this, "海军单位不能放在陆地格", Toast.LENGTH_SHORT).show();
+            return false;
+        }
+        if (!isNavalConfig(cfg) && sea) {
+            Toast.makeText(this, "陆军单位不能放在海洋格", Toast.LENGTH_SHORT).show();
+            return false;
+        }
+        return true;
+    }
+
+    /** 六邻居里有几个水格（和官方一样的奇偶列偏移）。 */
+    private int waterNeighborCount(int x, int y) {
+        if (mapData == null) return 0;
+        int[][] even = {{-1,0},{-1,-1},{0,-1},{1,-1},{1,0},{0,1}};
+        int[][] odd  = {{-1,0},{0,-1},{1,-1},{1,0},{1,1},{0,1}};
+        int[][] nb = ((x & 1) == 0) ? even : odd;
+        int c = 0;
+        for (int[] d : nb) {
+            int nx = x + d[0], ny = y + d[1];
+            if (nx < 0 || ny < 0 || nx >= mapData.width || ny >= mapData.height) continue;
+            TerrainTile t = mapData.getTile(nx, ny);
+            if (t != null && t.bmTerrain1Group == 1) c++;
+        }
+        return c;
     }
 
     private void startCropSelect() {
@@ -6482,6 +6596,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
     @Override public void onTileSelected(int x, int y, TerrainTile tile) {
         playSelectSfx();
         if (addingArmy && pendingArmyType != null && mapData != null) {
+            if (!canPlaceArmyHere(pendingArmyType, x, y)) return;   // 海/陆放错直接拒绝
             try {
                 history.save(mapData, "放置兵种");
                 byte[] raw = buildNewArmyRaw(x, y, pendingArmyType);
@@ -6652,6 +6767,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         }
         ArmyConfig cfg = ArmyConfig.byArmy(mapData.selectedArmyType);
         if (cfg == null) return;
+        if (!canPlaceArmyHere(cfg, x, y)) return;   // 海军不能放到陆地格
         try {
             if (System.currentTimeMillis() - lastBrushHistorySave > 800) {
                 history.save(mapData, "笔刷放置兵种");
