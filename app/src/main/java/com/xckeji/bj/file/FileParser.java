@@ -132,11 +132,20 @@ public class FileParser {
         int start = eventStart(h);
         int bytes = h.eventCount * 44;
         if (start + bytes > old.length) throw new IOException("事件段越界");
+        // 事件ID 取现有最大值 +1（与熊编辑器「＋新增事件」一致）
+        int maxId = -1;
+        for (int i = 0; i < h.eventCount; i++) {
+            int id = le32(old, start + i * 44);
+            if (id > maxId) maxId = id;
+        }
         byte[] result = new byte[old.length + 44];
         System.arraycopy(old, 0, result, 0, start + bytes);
-        // 新事件：事件ID 默认给序号，其余全 0
+        // 新事件默认值照熊编辑器：触发条件=2(回合到)、触发事件=4(无效果)、默认结束段=0xCCCCCC00
         ByteBuffer nb = ByteBuffer.wrap(result).order(ByteOrder.LITTLE_ENDIAN);
-        nb.putInt(start + bytes, h.eventCount);
+        nb.putInt(start + bytes + 0x00, maxId + 1);
+        nb.putInt(start + bytes + 0x08, 2);
+        nb.putInt(start + bytes + 0x0C, 4);
+        nb.putInt(start + bytes + 0x28, 0xCCCCCC00);
         System.arraycopy(old, start + bytes, result, start + bytes + 44,
                 old.length - (start + bytes));
         ByteBuffer hb = ByteBuffer.wrap(result).order(ByteOrder.LITTLE_ENDIAN);
