@@ -180,8 +180,6 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
     private FrameLayout buildingDetailOverlay;
     private LinearLayout buildingDetailPanel;
     private EditText[] buildingEds;
-    private FrameLayout btlOverlay;
-    private LinearLayout btlPanel;
     private EditText[] btlEds;
     private android.widget.Spinner btlVictorySp, btlEraSp;
     private FrameLayout btlEventListOverlay;
@@ -3103,17 +3101,12 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
                 new FrameLayout.LayoutParams((int) (sw * 0.8), (int) (sh * 0.8), Gravity.CENTER));
         rootFrame.addView(buildingDetailOverlay);
 
-        btlOverlay = new FrameLayout(this);
-        btlOverlay.setLayoutParams(new FrameLayout.LayoutParams(-1, -1));
-        btlOverlay.setVisibility(View.GONE);
-        btlPanel = new LinearLayout(this);
-        btlPanel.setOrientation(LinearLayout.VERTICAL);
-        btlPanel.setBackground(gradientBorderBg(14, 3, 0xFF16213E,
-                new int[]{0xFF3B82F6, 0xFF22D3EE}));
-        btlPanel.setPadding(10 * density, 8 * density, 10 * density, 8 * density);
-        btlOverlay.addView(btlPanel,
-                new FrameLayout.LayoutParams((int) (sw * 0.9), (int) (sh * 0.85), Gravity.CENTER));
-        rootFrame.addView(btlOverlay);
+
+        // 基础数据：全屏白渐变页，里面并排显示 BTL 主数据 / 军团列表 / 国家配置
+        baseDataOverlay = new FrameLayout(this);
+        baseDataOverlay.setLayoutParams(new FrameLayout.LayoutParams(-1, -1));
+        baseDataOverlay.setVisibility(View.GONE);
+        rootFrame.addView(baseDataOverlay);
 
         btlEventListOverlay = new FrameLayout(this);
         btlEventListOverlay.setLayoutParams(new FrameLayout.LayoutParams(-1, -1));
@@ -3354,6 +3347,10 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
 
     @Override
     public void onBackPressed() {
+        if (baseDataOverlay != null && baseDataOverlay.getVisibility() == View.VISIBLE) {
+            baseDataOverlay.setVisibility(View.GONE);      // 基础数据页：返回键先关它
+            return;
+        }
         if (aboutPageView != null) { closeAboutPage(); return; }   // 关于页：返回键先关它
         super.onBackPressed();
     }
@@ -3701,17 +3698,13 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         boolean panelVisible = rightPanel != null
                 && rightPanel.getVisibility() == View.VISIBLE;
         java.util.List<Runnable> acts = new java.util.ArrayList<>();
-        acts.add(() -> showBtlDataOverlay());
+        acts.add(() -> showBaseDataPage());
         acts.add(() -> openDataPanel());
-        acts.add(() -> showTailSectionsDialog());
-        acts.add(() -> showLegionsOverlay());
-        acts.add(() -> showNationConfigDialog());
         acts.add(() -> {
             if (rightPanel == null) return;
             rightPanel.setVisibility(panelVisible ? View.GONE : View.VISIBLE);
         });
-        showDropdownMenu(anchor, new String[]{"btl数据", "数据面板", "数据段列表…", "军团列表",
-                "国家配置（表格）",
+        showDropdownMenu(anchor, new String[]{"基础数据", "数据面板",
                 (panelVisible ? "隐藏属性面板" : "显示属性面板")}, acts);
     }
 
@@ -4344,71 +4337,304 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
     }
 
     /** BTL 主数据 + 事件编辑：胜利条件/战役时代/事件触发条件/触发事件均为下拉单选框。 */
-    private void showBtlDataOverlay() {
+    // ================= 基础数据（全屏白渐变：BTL 主数据 / 军团列表 / 国家配置 并排） =================
+    private FrameLayout baseDataOverlay;
+
+    /** 打开「基础数据」全屏页。 */
+    private void showBaseDataPage() {
         if (mapData == null || mapData.btlOriginalData == null) {
             Toast.makeText(this, "请先加载 BTL 地图", Toast.LENGTH_SHORT).show();
             return;
         }
-        final int density = (int) getResources().getDisplayMetrics().density;
+        final float dp = getResources().getDisplayMetrics().density;
+
+        android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable(
+                android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{0xFFFFFFFF, 0xFFF5F7FB, 0xFFE6EBF3});
+        baseDataOverlay.setBackground(bg);
+        baseDataOverlay.removeAllViews();
+
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding((int) (12 * dp), (int) (10 * dp), (int) (12 * dp), (int) (10 * dp));
+        baseDataOverlay.addView(root, new FrameLayout.LayoutParams(-1, -1));
+
+        // 顶栏：返回 + 标题
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setGravity(Gravity.CENTER_VERTICAL);
+        Button back = new Button(this);
+        back.setText("← 返回");
+        back.setTextSize(13);
+        back.setTextColor(Color.WHITE);
+        back.setAllCaps(false);
+        back.setBackground(baseDataBackBg(dp));
+        back.setOnClickListener(v -> baseDataOverlay.setVisibility(View.GONE));
+        bar.addView(back, new LinearLayout.LayoutParams((int) (92 * dp), (int) (40 * dp)));
+        View gap = new View(this);
+        gap.setLayoutParams(new LinearLayout.LayoutParams((int) (10 * dp), 1));
+        bar.addView(gap);
+        TextView title = new TextView(this);
+        title.setText("基础数据");
+        title.setTextSize(18);
+        title.setTextColor(0xFF1f2937);
+        title.setTypeface(null, android.graphics.Typeface.BOLD);
+        bar.addView(title);
+        TextView hint = new TextView(this);
+        hint.setText("　BTL 主数据 ｜ 军团列表 ｜ 国家配置（并排，各自可滚动）");
+        hint.setTextSize(12);
+        hint.setTextColor(0xFF6b7280);
+        bar.addView(hint);
+        root.addView(bar, new LinearLayout.LayoutParams(-1, -2));
+
+        // 三栏并排
+        LinearLayout cols = new LinearLayout(this);
+        cols.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams colLp = new LinearLayout.LayoutParams(0, -1, 1f);
+        colLp.setMargins((int) (4 * dp), (int) (8 * dp), (int) (4 * dp), 0);
+        cols.addView(addLightCard(cols, "BTL 主数据", dp), colLp);
+        LinearLayout col2 = addLightCard(cols, "军团列表（点一行编辑）", dp);
+        LinearLayout.LayoutParams col2Lp = new LinearLayout.LayoutParams(0, -1, 1f);
+        col2Lp.setMargins((int) (4 * dp), (int) (8 * dp), (int) (4 * dp), 0);
+        cols.addView(col2, col2Lp);
+        LinearLayout col3 = addLightCard(cols, "国家配置（点色块改颜色）", dp);
+        LinearLayout.LayoutParams col3Lp = new LinearLayout.LayoutParams(0, -1, 1f);
+        col3Lp.setMargins((int) (4 * dp), (int) (8 * dp), (int) (4 * dp), 0);
+        cols.addView(col3, col3Lp);
+        root.addView(cols, new LinearLayout.LayoutParams(-1, 0, 1f));
+
+        // 三栏内容
+        LinearLayout btlContent = (LinearLayout) ((LinearLayout) cols.getChildAt(0)).getTag();
+        LinearLayout legionContent = (LinearLayout) col2.getTag();
+        LinearLayout nationContent = (LinearLayout) col3.getTag();
+        fillBaseBtlColumn(btlContent, dp);
+        fillBaseLegionColumn(legionContent, dp);
+        fillBaseNationColumn(nationContent, dp);
+
+        baseDataOverlay.setVisibility(View.VISIBLE);
+    }
+
+    /** 白底卡片；返回内部内容容器（存在 tag 里）。 */
+    private LinearLayout addLightCard(LinearLayout parent, String titleText, float dp) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable();
+        g.setColor(0xFFFFFFFF);
+        g.setCornerRadius(12 * dp);
+        g.setStroke(Math.max(1, (int) dp), 0xFFD5DCE8);
+        card.setBackground(g);
+        card.setPadding((int) (10 * dp), (int) (8 * dp), (int) (10 * dp), (int) (8 * dp));
+        TextView t = new TextView(this);
+        t.setText(titleText);
+        t.setTextSize(14);
+        t.setTextColor(0xFF111827);
+        t.setTypeface(null, android.graphics.Typeface.BOLD);
+        card.addView(t);
+        View line = new View(this);
+        line.setLayoutParams(new LinearLayout.LayoutParams(-1, Math.max(1, (int) dp)));
+        line.setBackgroundColor(0xFFE4E9F2);
+        card.addView(line);
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(0, (int) (6 * dp), 0, (int) (6 * dp));
+        ScrollView sv = new ScrollView(this);
+        sv.addView(content);
+        card.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1f));
+        card.setTag(content);
+        return card;
+    }
+
+    private android.graphics.drawable.Drawable baseDataBackBg(float dp) {
+        android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable(
+                android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{0xFF4f8ef7, 0xFF1d4ed8});
+        g.setCornerRadius(10 * dp);
+        return g;
+    }
+
+    private void lightInfo(LinearLayout parent, String text, float dp) {
+        TextView tv = new TextView(this);
+        tv.setText(text);
+        tv.setTextSize(12);
+        tv.setTextColor(0xFF4b5563);
+        tv.setPadding(0, 2, 0, 4);
+        parent.addView(tv);
+    }
+
+    private void lightBtn(LinearLayout parent, String text, int color, float dp, Runnable act) {
+        Button b = new Button(this);
+        b.setText(text);
+        b.setTextSize(13);
+        b.setTextColor(Color.WHITE);
+        b.setAllCaps(false);
+        android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable();
+        g.setColor(color);
+        g.setCornerRadius(8 * dp);
+        b.setBackground(g);
+        b.setOnClickListener(v -> act.run());
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, (int) (38 * dp));
+        lp.setMargins(0, (int) (5 * dp), 0, 0);
+        parent.addView(b, lp);
+    }
+
+    /** 左栏：BTL 主数据（可改胜利条件/回合/时代/积攒资源），保存走原来的 saveBtlHeader。 */
+    private void fillBaseBtlColumn(LinearLayout l, float dp) {
         final byte[] btl = mapData.btlOriginalData;
         final FileParser.BtlHeaderInfo h = FileParser.parseBTLHeader(btl);
         final java.nio.ByteBuffer bb = java.nio.ByteBuffer.wrap(btl)
                 .order(java.nio.ByteOrder.LITTLE_ENDIAN);
-
-        btlPanel.removeAllViews();
-        btlPanel.addView(makeOverlayHeader("BTL 主数据与事件",
-                () -> btlOverlay.setVisibility(View.GONE),
-                () -> btlOverlay.setVisibility(View.GONE)));
-        ScrollView sv = new ScrollView(this);
-        LinearLayout l = new LinearLayout(this);
-        l.setOrientation(LinearLayout.VERTICAL);
-
-        TextView infoTv = new TextView(this);
-        infoTv.setText(String.format(java.util.Locale.US,
-                "版本 %d  地图序号 %d  截取(%d,%d)  %dx%d\n军团 %d  建筑 %d  兵种 %d  方案 %d  事件 %d  天气 %d  地块 %d",
+        lightInfo(l, String.format(java.util.Locale.US,
+                "版本 %d　地图序号 %d\n截取 (%d,%d)　%d×%d\n军团 %d　建筑 %d　兵种 %d\n方案 %d　事件 %d　天气 %d\n地块总数 %d",
                 h.version, h.mapId, h.captureX, h.captureY, h.width, h.height,
                 h.legionCount, h.buildingCount, h.armyCount, h.planCount,
-                h.eventCount, h.weatherCount, h.width * h.height));
-        infoTv.setTextSize(12);
-        infoTv.setTextColor(0xFFcbd5e1);
-        infoTv.setPadding(4, 4, 4, 8);
-        l.addView(infoTv);
-
-        // 可编辑主数据
+                h.eventCount, h.weatherCount, h.sectionTiles > 0 ? h.sectionTiles : h.width * h.height), dp);
         btlVictorySp = makeSpinner(new String[]{"00 占领红圈", "01 消灭全部", "02 保护红圈"},
                 indexOfVal(new int[]{0, 1, 2}, bb.getInt(0x30)));
         btlEraSp = makeSpinner(new String[]{"00 二战", "01 冷战"},
                 indexOfVal(new int[]{0, 1}, bb.getInt(0x50)));
-        addSpinnerRow(l, "胜利条件", btlVictorySp);
+        addSpinnerRowLight(l, "胜利条件", btlVictorySp);
         btlEds = new EditText[5];
-        btlEds[0] = addNumRow(l, "最小回合", bb.getInt(0x34));
-        btlEds[1] = addNumRow(l, "最大回合", bb.getInt(0x38));
-        addSpinnerRow(l, "战役时代", btlEraSp);
-        btlEds[2] = addNumRow(l, "积攒金钱", bb.getInt(0x5C));
-        btlEds[3] = addNumRow(l, "积攒齿轮", bb.getInt(0x60));
-        btlEds[4] = addNumRow(l, "积攒原子", bb.getInt(0x64));
-        Button saveHdr = new Button(this);
-        saveHdr.setText("保存主数据");
-        saveHdr.setTextSize(13);
-        saveHdr.setTextColor(Color.WHITE);
-        saveHdr.setBackgroundColor(Color.parseColor("#22c55e"));
-        saveHdr.setOnClickListener(v -> saveBtlHeader());
-        l.addView(saveHdr);
-
-        // 事件入口：主数据页单独一栏，点击进入事件列表，再点具体事件进编辑页
+        btlEds[0] = addNumRowLight(l, "最小回合", bb.getInt(0x34));
+        btlEds[1] = addNumRowLight(l, "最大回合", bb.getInt(0x38));
+        addSpinnerRowLight(l, "战役时代", btlEraSp);
+        btlEds[2] = addNumRowLight(l, "积攒金钱", bb.getInt(0x5C));
+        btlEds[3] = addNumRowLight(l, "积攒齿轮", bb.getInt(0x60));
+        btlEds[4] = addNumRowLight(l, "积攒原子", bb.getInt(0x64));
+        lightBtn(l, "保存主数据", 0xFF22c55e, dp, this::saveBtlHeader);
         if (h.eventCount > 0) {
-            Button evBtn = new Button(this);
-            evBtn.setText("事件列表（" + h.eventCount + " 条）→");
-            evBtn.setTextSize(13);
-            evBtn.setTextColor(Color.WHITE);
-            evBtn.setBackgroundColor(Color.parseColor("#1e5fa8"));
-            evBtn.setOnClickListener(v -> showBtlEventListOverlay());
-            l.addView(evBtn);
+            lightBtn(l, "事件列表（" + h.eventCount + " 条）→", 0xFF1e5fa8, dp,
+                    () -> showBtlEventListOverlay());
         }
+        lightBtn(l, "数据段列表…", 0xFF6b7280, dp, () -> showTailSectionsDialog());
+    }
 
-        sv.addView(l);
-        btlPanel.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1));
-        btlOverlay.setVisibility(View.VISIBLE);
+    /** 中栏：军团列表（国旗 + 颜色块 + 名称，点一行进原有详情页）。 */
+    private void fillBaseLegionColumn(LinearLayout l, float dp) {
+        ensureFlagIcons();
+        for (int i = 0; i < mapData.legions.size(); i++) {
+            final MapData.Legion lg = mapData.legions.get(i);
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding((int) (4 * dp), (int) (6 * dp), (int) (4 * dp), (int) (6 * dp));
+            row.setClickable(true);
+            row.setOnClickListener(v -> showLegionDetailOverlay(lg));
+            Bitmap flag = flagIcons != null ? flagIcons.get(lg.country) : null;
+            if (flag != null) {
+                ImageView iv = new ImageView(this);
+                iv.setImageBitmap(flag);
+                iv.setLayoutParams(new LinearLayout.LayoutParams((int) (34 * dp), (int) (22 * dp)));
+                row.addView(iv);
+            }
+            View cb = new View(this);
+            LinearLayout.LayoutParams cbLp = new LinearLayout.LayoutParams((int) (18 * dp), (int) (18 * dp));
+            cbLp.setMargins((int) (6 * dp), 0, (int) (6 * dp), 0);
+            cb.setLayoutParams(cbLp);
+            cb.setBackgroundColor(lg.color);
+            row.addView(cb);
+            TextView tv = new TextView(this);
+            tv.setText("军团" + (i + 1) + "　" + CountryData.name(lg.country)
+                    + "（ID " + lg.country + "）");
+            tv.setTextSize(13);
+            tv.setTextColor(0xFF1f2937);
+            tv.setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1f));
+            row.addView(tv);
+            View div = new View(this);
+            div.setLayoutParams(new LinearLayout.LayoutParams(-1, 1));
+            div.setBackgroundColor(0xFFEDF1F7);
+            l.addView(row);
+            l.addView(div);
+        }
+        lightBtn(l, "＋ 新建国家", 0xFF8b5cf6, dp, () -> showAddCountryDialog());
+    }
+
+    /** 右栏：国家配置（每行军团 + 颜色块，点色块直接改色；完整表格按钮走原来的对话框）。 */
+    private void fillBaseNationColumn(LinearLayout l, float dp) {
+        lightInfo(l, "点色块改这个军团的国家颜色（游戏里地块/省份颜色就按它）", dp);
+        for (int i = 0; i < mapData.legions.size(); i++) {
+            final MapData.Legion lg = mapData.legions.get(i);
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding((int) (4 * dp), (int) (5 * dp), (int) (4 * dp), (int) (5 * dp));
+            TextView name = new TextView(this);
+            name.setText("军团" + (i + 1) + "　" + CountryData.name(lg.country));
+            name.setTextSize(13);
+            name.setTextColor(0xFF1f2937);
+            name.setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1f));
+            row.addView(name);
+            View swatch = new View(this);
+            LinearLayout.LayoutParams swLp = new LinearLayout.LayoutParams((int) (34 * dp), (int) (24 * dp));
+            swatch.setLayoutParams(swLp);
+            swatch.setBackground(colorSwatchBg(lg.color, false, dp));
+            swatch.setClickable(true);
+            final int legionIdx = i;
+            swatch.setOnClickListener(v -> showColorPicker(lg.color, c -> {
+                int[] vals = mapData.legionColors;
+                if (vals != null && legionIdx < vals.length) vals[legionIdx] = c;
+                MapData.Legion target = mapData.legions.get(legionIdx);
+                target.color = c;              // 列表/色块显示也跟着变
+                byte[] raw = target.raw;
+                if (raw != null && raw.length >= 0x2C) {
+                    raw[0x28] = (byte) ((c >> 16) & 0xFF);
+                    raw[0x29] = (byte) ((c >> 8) & 0xFF);
+                    raw[0x2A] = (byte) (c & 0xFF);
+                    raw[0x2B] = (byte) ((c >>> 24) & 0xFF);
+                }
+                try {
+                    FileParser.patchLegion(mapData, target, raw);
+                } catch (Exception ignored) {
+                }
+                hexMapView.refresh();
+                showBaseDataPage();
+            }));
+            row.addView(swatch);
+            View div = new View(this);
+            div.setLayoutParams(new LinearLayout.LayoutParams(-1, 1));
+            div.setBackgroundColor(0xFFEDF1F7);
+            l.addView(row);
+            l.addView(div);
+        }
+        lightBtn(l, "打开完整表格（75 列）", 0xFF1e5fa8, dp, () -> showNationConfigDialog());
+    }
+
+    /** 浅色表单：标签深色，输入框深色底白字（白底页上也看得清）。 */
+    private EditText addNumRowLight(LinearLayout parent, String label, int value) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, 2, 0, 2);
+        TextView lb = new TextView(this);
+        lb.setText(label);
+        lb.setTextSize(13);
+        lb.setTextColor(0xFF1f2937);
+        lb.setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1f));
+        row.addView(lb);
+        EditText et = new EditText(this);
+        et.setInputType(InputType.TYPE_CLASS_NUMBER);
+        et.setText(String.valueOf(value));
+        et.setTextColor(Color.WHITE);
+        et.setTextSize(13);
+        et.setBackgroundColor(0xFF374151);
+        et.setLayoutParams(new LinearLayout.LayoutParams((int) (86 * getResources().getDisplayMetrics().density), -2));
+        row.addView(et);
+        parent.addView(row);
+        return et;
+    }
+
+    private void addSpinnerRowLight(LinearLayout parent, String label, android.widget.Spinner sp) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, 2, 0, 2);
+        TextView lb = new TextView(this);
+        lb.setText(label);
+        lb.setTextSize(13);
+        lb.setTextColor(0xFF1f2937);
+        lb.setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1f));
+        row.addView(lb);
+        row.addView(sp, new LinearLayout.LayoutParams((int) (120 * getResources().getDisplayMetrics().density), -2));
+        parent.addView(row);
     }
 
     private void saveBtlHeader() {
