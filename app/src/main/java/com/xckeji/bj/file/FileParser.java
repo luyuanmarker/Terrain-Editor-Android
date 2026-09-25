@@ -125,6 +125,47 @@ public class FileParser {
     }
 
     /** 把编辑后的 44 字节事件记录写回 BTL。 */
+    public static int addEvent(MapData mapData) throws IOException {
+        if (mapData == null || mapData.btlOriginalData == null) throw new IOException("请先加载 BTL 地图");
+        byte[] old = mapData.btlOriginalData;
+        BtlHeaderInfo h = parseBTLHeader(old);
+        int start = eventStart(h);
+        int bytes = h.eventCount * 44;
+        if (start + bytes > old.length) throw new IOException("事件段越界");
+        byte[] result = new byte[old.length + 44];
+        System.arraycopy(old, 0, result, 0, start + bytes);
+        // 新事件：事件ID 默认给序号，其余全 0
+        ByteBuffer nb = ByteBuffer.wrap(result).order(ByteOrder.LITTLE_ENDIAN);
+        nb.putInt(start + bytes, h.eventCount);
+        System.arraycopy(old, start + bytes, result, start + bytes + 44,
+                old.length - (start + bytes));
+        ByteBuffer hb = ByteBuffer.wrap(result).order(ByteOrder.LITTLE_ENDIAN);
+        hb.putInt(0x28, h.eventCount + 1);
+        mapData.btlOriginalData = result;
+        computeTailStarts(mapData, parseBTLHeader(result));
+        return h.eventCount;                 // 新事件的下标
+    }
+
+    /** 删除第 index 条事件：整段前移 44 字节，事件总数 -1。 */
+    public static boolean removeEvent(MapData mapData, int index) throws IOException {
+        if (mapData == null || mapData.btlOriginalData == null) throw new IOException("请先加载 BTL 地图");
+        byte[] old = mapData.btlOriginalData;
+        BtlHeaderInfo h = parseBTLHeader(old);
+        if (index < 0 || index >= h.eventCount) return false;
+        int start = eventStart(h);
+        int off = start + index * 44;
+        if (off + 44 > old.length) throw new IOException("事件段越界");
+        byte[] result = new byte[old.length - 44];
+        System.arraycopy(old, 0, result, 0, off);
+        System.arraycopy(old, off + 44, result, off, old.length - off - 44);
+        ByteBuffer hb = ByteBuffer.wrap(result).order(ByteOrder.LITTLE_ENDIAN);
+        hb.putInt(0x28, h.eventCount - 1);
+        mapData.btlOriginalData = result;
+        computeTailStarts(mapData, parseBTLHeader(result));
+        return true;
+    }
+
+    /** 把编辑后的 44 字节事件记录写回 BTL。 */
     public static void patchEvent(MapData mapData, int index, byte[] raw44) throws IOException {
         if (mapData == null || mapData.btlOriginalData == null
                 || raw44 == null || raw44.length < 44) {

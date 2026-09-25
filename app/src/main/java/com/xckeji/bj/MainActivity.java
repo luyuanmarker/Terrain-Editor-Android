@@ -182,10 +182,6 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
     private EditText[] buildingEds;
     private EditText[] btlEds;
     private android.widget.Spinner btlVictorySp, btlEraSp;
-    private FrameLayout btlEventListOverlay;
-    private LinearLayout btlEventListPanel;
-    private FrameLayout btlEventDetailOverlay;
-    private LinearLayout btlEventDetailPanel;
     private EditText[] btlEventEds;
     private android.widget.Spinner btlEventCondSp, btlEventTypeSp;
     private int btlEventEditIndex = -1;
@@ -3108,29 +3104,6 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         baseDataOverlay.setVisibility(View.GONE);
         rootFrame.addView(baseDataOverlay);
 
-        btlEventListOverlay = new FrameLayout(this);
-        btlEventListOverlay.setLayoutParams(new FrameLayout.LayoutParams(-1, -1));
-        btlEventListOverlay.setVisibility(View.GONE);
-        btlEventListPanel = new LinearLayout(this);
-        btlEventListPanel.setOrientation(LinearLayout.VERTICAL);
-        btlEventListPanel.setBackground(gradientBorderBg(14, 3, 0xFF16213E,
-                new int[]{0xFF3B82F6, 0xFF22D3EE}));
-        btlEventListPanel.setPadding(10 * density, 8 * density, 10 * density, 8 * density);
-        btlEventListOverlay.addView(btlEventListPanel,
-                new FrameLayout.LayoutParams((int) (sw * 0.8), (int) (sh * 0.8), Gravity.CENTER));
-        rootFrame.addView(btlEventListOverlay);
-
-        btlEventDetailOverlay = new FrameLayout(this);
-        btlEventDetailOverlay.setLayoutParams(new FrameLayout.LayoutParams(-1, -1));
-        btlEventDetailOverlay.setVisibility(View.GONE);
-        btlEventDetailPanel = new LinearLayout(this);
-        btlEventDetailPanel.setOrientation(LinearLayout.VERTICAL);
-        btlEventDetailPanel.setBackground(gradientBorderBg(14, 3, 0xFF16213E,
-                new int[]{0xFF3B82F6, 0xFF22D3EE}));
-        btlEventDetailPanel.setPadding(10 * density, 8 * density, 10 * density, 8 * density);
-        btlEventDetailOverlay.addView(btlEventDetailPanel,
-                new FrameLayout.LayoutParams((int) (sw * 0.8), (int) (sh * 0.8), Gravity.CENTER));
-        rootFrame.addView(btlEventDetailOverlay);
 
         // FPS / 设备 / 版本号：最后加入 rootFrame，永远在最顶层，不被覆盖
         rootFrame.addView(infoPanel, infoLp);
@@ -4337,10 +4310,42 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
     }
 
     /** BTL 主数据 + 事件编辑：胜利条件/战役时代/事件触发条件/触发事件均为下拉单选框。 */
-    // ================= 基础数据（全屏白渐变：BTL 主数据 / 军团列表 / 国家配置 并排） =================
+    // ================= 基础数据（全屏白渐变：按钮并排居中，点哪个就整屏显示哪个） =================
     private FrameLayout baseDataOverlay;
+    private LinearLayout baseDataSectionHost;
+    private final Button[] baseDataTabs = new Button[4];
+    private static final String[] BASE_DATA_TAB_NAMES = {"BTL 主数据", "军团列表", "国家配置", "事件"};
+    private int baseDataSection = 0;
+    private int baseDataEventEditIdx = -1;   // 事件页：>=0 表示正在编辑某条事件
 
-    /** 打开「基础数据」全屏页。 */
+    /** 熊编辑器（origin.py parse_event）的 44 字节事件字段表。 */
+    private static final String[][] EVENT_FIELDS = {
+            {"事件ID", "u32", "0x00"},
+            {"关联事件", "u16", "0x04"},
+            {"关联事件延迟", "u16", "0x06"},
+            {"触发军团", "u32", "0x10"},
+            {"加成军团", "u32", "0x14"},
+            {"目标值", "u32", "0x18"},
+            {"触发条件低", "u16", "0x1C"},
+            {"CountryRecordId", "u16", "0x1E"},
+            {"触发回合", "u16", "0x20"},
+            {"禁用种子", "u8", "0x22"},
+            {"接近距离", "u8", "0x23"},
+            {"对话代码", "u32", "0x24"},
+            {"默认结束段", "u32", "0x28"},
+    };
+    /** 事件触发方式（0x08）。 */
+    private static final int[] EVENT_COND_VALS = {0, 1, 2, 4};
+    private static final String[] EVENT_COND_LABELS = {
+            "00 带事件的建筑被攻占", "01 消灭单位", "02 回合到", "04 伴生事件"};
+    /** 事件类型（0x0C）。 */
+    private static final int[] EVENT_TYPE_VALS = {0, 1, 2, 3, 4, 6, 7, 8, 10, 11, 12, 13, 14};
+    private static final String[] EVENT_TYPE_LABELS = {
+            "00 士气上升", "01 士气下降", "02 士气双降", "03 混乱", "04 无效果",
+            "06 AI变化(整个军团)", "07 叛变", "08 集结", "10 立刻获得金币",
+            "11 立刻获得工业", "12 立刻获得科技", "13 刷兵事件", "14 军团归属给玩家"};
+
+    /** 打开「基础数据」全屏页：一排居中按钮 + 下面整屏显示选中的那一项。 */
     private void showBaseDataPage() {
         if (mapData == null || mapData.btlOriginalData == null) {
             Toast.makeText(this, "请先加载 BTL 地图", Toast.LENGTH_SHORT).show();
@@ -4380,68 +4385,81 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         title.setTextColor(0xFF1f2937);
         title.setTypeface(null, android.graphics.Typeface.BOLD);
         bar.addView(title);
-        TextView hint = new TextView(this);
-        hint.setText("　BTL 主数据 ｜ 军团列表 ｜ 国家配置（并排，各自可滚动）");
-        hint.setTextSize(12);
-        hint.setTextColor(0xFF6b7280);
-        bar.addView(hint);
         root.addView(bar, new LinearLayout.LayoutParams(-1, -2));
 
-        // 三栏并排
-        LinearLayout cols = new LinearLayout(this);
-        cols.setOrientation(LinearLayout.HORIZONTAL);
-        LinearLayout.LayoutParams colLp = new LinearLayout.LayoutParams(0, -1, 1f);
-        colLp.setMargins((int) (4 * dp), (int) (8 * dp), (int) (4 * dp), 0);
-        cols.addView(addLightCard(cols, "BTL 主数据", dp), colLp);
-        LinearLayout col2 = addLightCard(cols, "军团列表（点一行编辑）", dp);
-        LinearLayout.LayoutParams col2Lp = new LinearLayout.LayoutParams(0, -1, 1f);
-        col2Lp.setMargins((int) (4 * dp), (int) (8 * dp), (int) (4 * dp), 0);
-        cols.addView(col2, col2Lp);
-        LinearLayout col3 = addLightCard(cols, "国家配置（点色块改颜色）", dp);
-        LinearLayout.LayoutParams col3Lp = new LinearLayout.LayoutParams(0, -1, 1f);
-        col3Lp.setMargins((int) (4 * dp), (int) (8 * dp), (int) (4 * dp), 0);
-        cols.addView(col3, col3Lp);
-        root.addView(cols, new LinearLayout.LayoutParams(-1, 0, 1f));
+        // 一排按钮，水平居中
+        LinearLayout tabs = new LinearLayout(this);
+        tabs.setOrientation(LinearLayout.HORIZONTAL);
+        tabs.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams tabLp = new LinearLayout.LayoutParams(-2, (int) (42 * dp));
+        tabLp.setMargins((int) (5 * dp), (int) (8 * dp), (int) (5 * dp), (int) (6 * dp));
+        for (int i = 0; i < BASE_DATA_TAB_NAMES.length; i++) {
+            final int idx = i;
+            Button b = new Button(this);
+            b.setText(BASE_DATA_TAB_NAMES[i]);
+            b.setTextSize(14);
+            b.setAllCaps(false);
+            b.setPadding((int) (18 * dp), 0, (int) (18 * dp), 0);
+            b.setOnClickListener(v -> {
+                baseDataSection = idx;
+                baseDataEventEditIdx = -1;    // 切栏目时回到该栏目的列表/主页
+                renderBaseDataSection();
+            });
+            baseDataTabs[i] = b;
+            tabs.addView(b, tabLp);
+        }
+        root.addView(tabs, new LinearLayout.LayoutParams(-1, -2));
 
-        // 三栏内容
-        LinearLayout btlContent = (LinearLayout) ((LinearLayout) cols.getChildAt(0)).getTag();
-        LinearLayout legionContent = (LinearLayout) col2.getTag();
-        LinearLayout nationContent = (LinearLayout) col3.getTag();
-        fillBaseBtlColumn(btlContent, dp);
-        fillBaseLegionColumn(legionContent, dp);
-        fillBaseNationColumn(nationContent, dp);
+        // 内容区：整屏显示当前栏目
+        baseDataSectionHost = new LinearLayout(this);
+        baseDataSectionHost.setOrientation(LinearLayout.VERTICAL);
+        android.graphics.drawable.GradientDrawable card = new android.graphics.drawable.GradientDrawable();
+        card.setColor(0xFFFFFFFF);
+        card.setCornerRadius(12 * dp);
+        card.setStroke(Math.max(1, (int) dp), 0xFFD5DCE8);
+        baseDataSectionHost.setBackground(card);
+        baseDataSectionHost.setPadding((int) (12 * dp), (int) (10 * dp), (int) (12 * dp), (int) (10 * dp));
+        root.addView(baseDataSectionHost, new LinearLayout.LayoutParams(-1, 0, 1f));
 
+        renderBaseDataSection();
         baseDataOverlay.setVisibility(View.VISIBLE);
     }
 
-    /** 白底卡片；返回内部内容容器（存在 tag 里）。 */
-    private LinearLayout addLightCard(LinearLayout parent, String titleText, float dp) {
-        LinearLayout card = new LinearLayout(this);
-        card.setOrientation(LinearLayout.VERTICAL);
-        android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable();
-        g.setColor(0xFFFFFFFF);
-        g.setCornerRadius(12 * dp);
-        g.setStroke(Math.max(1, (int) dp), 0xFFD5DCE8);
-        card.setBackground(g);
-        card.setPadding((int) (10 * dp), (int) (8 * dp), (int) (10 * dp), (int) (8 * dp));
-        TextView t = new TextView(this);
-        t.setText(titleText);
-        t.setTextSize(14);
-        t.setTextColor(0xFF111827);
-        t.setTypeface(null, android.graphics.Typeface.BOLD);
-        card.addView(t);
-        View line = new View(this);
-        line.setLayoutParams(new LinearLayout.LayoutParams(-1, Math.max(1, (int) dp)));
-        line.setBackgroundColor(0xFFE4E9F2);
-        card.addView(line);
+    /** 刷新按钮选中态 + 重画当前栏目内容。 */
+    private void renderBaseDataSection() {
+        if (baseDataSectionHost == null) return;
+        final float dp = getResources().getDisplayMetrics().density;
+        for (int i = 0; i < baseDataTabs.length; i++) {
+            if (baseDataTabs[i] == null) continue;
+            boolean on = (i == baseDataSection);
+            baseDataTabs[i].setTextColor(Color.WHITE);
+            baseDataTabs[i].setBackground(baseDataTabBg(on, dp));
+        }
+        baseDataSectionHost.removeAllViews();
         LinearLayout content = new LinearLayout(this);
         content.setOrientation(LinearLayout.VERTICAL);
-        content.setPadding(0, (int) (6 * dp), 0, (int) (6 * dp));
         ScrollView sv = new ScrollView(this);
         sv.addView(content);
-        card.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1f));
-        card.setTag(content);
-        return card;
+        baseDataSectionHost.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1f));
+        switch (baseDataSection) {
+            case 1: fillBaseLegionColumn(content, dp); break;
+            case 2: fillBaseNationColumn(content, dp); break;
+            case 3: fillBaseEventSection(content, dp); break;
+            default: fillBaseBtlColumn(content, dp); break;
+        }
+    }
+
+    private android.graphics.drawable.Drawable baseDataTabBg(boolean active, float dp) {
+        android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable();
+        if (active) {
+            g.setColors(new int[]{0xFF4f8ef7, 0xFF1d4ed8});
+            g.setOrientation(android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM);
+        } else {
+            g.setColor(0xFFE8ECF4);
+        }
+        g.setCornerRadius(10 * dp);
+        if (active) g.setStroke(Math.max(1, (int) dp), 0xFF1e40af);
+        return g;
     }
 
     private android.graphics.drawable.Drawable baseDataBackBg(float dp) {
@@ -4503,7 +4521,11 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         lightBtn(l, "保存主数据", 0xFF22c55e, dp, this::saveBtlHeader);
         if (h.eventCount > 0) {
             lightBtn(l, "事件列表（" + h.eventCount + " 条）→", 0xFF1e5fa8, dp,
-                    () -> showBtlEventListOverlay());
+                    () -> {                       // 直接切到「事件」栏（新版事件编辑）
+                        baseDataSection = 3;
+                        baseDataEventEditIdx = -1;
+                        renderBaseDataSection();
+                    });
         }
         lightBtn(l, "数据段列表…", 0xFF6b7280, dp, () -> showTailSectionsDialog());
     }
@@ -4599,6 +4621,226 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
     }
 
     /** 浅色表单：标签深色，输入框深色底白字（白底页上也看得清）。 */
+    // ===== 事件（按熊编辑器 origin.py 的 44 字节事件结构整体搬过来）=====
+    private void fillBaseEventSection(LinearLayout l, float dp) {
+        final byte[] btl = mapData.btlOriginalData;
+        final FileParser.BtlHeaderInfo h = FileParser.parseBTLHeader(btl);
+        if (baseDataEventEditIdx >= 0 && baseDataEventEditIdx < h.eventCount) {
+            fillBaseEventEditor(l, dp, h, baseDataEventEditIdx);
+            return;
+        }
+        lightInfo(l, "共 " + h.eventCount + " 条事件（44 字节/条）。点一条进入编辑，字段与熊编辑器完全一致。", dp);
+        LinearLayout tools = new LinearLayout(this);
+        tools.setOrientation(LinearLayout.HORIZONTAL);
+        tools.setGravity(Gravity.CENTER_VERTICAL);
+        addSmallLightBtn(tools, "＋ 新增事件", 0xFF22c55e, dp, () -> {
+            try {
+                int idx = FileParser.addEvent(mapData);
+                baseDataEventEditIdx = idx;
+                hexMapView.refresh(); updateInfo();
+                renderBaseDataSection();
+                Toast.makeText(this, "已新增事件 #" + idx, Toast.LENGTH_SHORT).show();
+            } catch (Exception e) {
+                Toast.makeText(this, "新增失败: " + e.getMessage(), Toast.LENGTH_LONG).show();
+            }
+        });
+        addSmallLightBtn(tools, "说明", 0xFF6b7280, dp, this::showEventHelp);
+        addSmallLightBtn(tools, "清空全部", 0xFFb91c1c, dp, () -> {
+            new AlertDialog.Builder(this, R.style.DarkDialog)
+                    .setTitle("清空全部事件")
+                    .setMessage("确定删除该地图的全部 " + FileParser.parseBTLHeader(mapData.btlOriginalData).eventCount + " 条事件？")
+                    .setNegativeButton("取消", null)
+                    .setPositiveButton("清空", (d2, w2) -> {
+                        try {
+                            int n = FileParser.parseBTLHeader(mapData.btlOriginalData).eventCount;
+                            for (int i = 0; i < n; i++) FileParser.removeEvent(mapData, 0);
+                            baseDataEventEditIdx = -1;
+                            hexMapView.refresh(); updateInfo();
+                            renderBaseDataSection();
+                            Toast.makeText(this, "已清空 " + n + " 条事件", Toast.LENGTH_SHORT).show();
+                        } catch (Exception e) {
+                            Toast.makeText(this, "清空失败: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                        }
+                    }).show();
+        });
+        l.addView(tools);
+        final java.nio.ByteBuffer bb = java.nio.ByteBuffer.wrap(btl).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+        int start = FileParser.eventStart(h);
+        for (int i = 0; i < h.eventCount; i++) {
+            int addr = start + i * 44;
+            if (addr + 44 > btl.length) break;
+            final int idx = i;
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding((int) (4 * dp), (int) (8 * dp), (int) (4 * dp), (int) (8 * dp));
+            row.setClickable(true);
+            row.setOnClickListener(v -> {
+                baseDataEventEditIdx = idx;
+                renderBaseDataSection();
+            });
+            TextView tv = new TextView(this);
+            tv.setText(String.format(java.util.Locale.US, "事件 #%d　%s　%s　回合 %d",
+                    idx, eventCondLabel(btl[addr + 0x8] & 0xFF),
+                    eventTypeLabel(btl[addr + 0xC] & 0xFF), bb.getShort(addr + 0x20) & 0xFFFF));
+            tv.setTextSize(13);
+            tv.setTextColor(0xFF1f2937);
+            tv.setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1f));
+            row.addView(tv);
+            l.addView(row);
+            View div = new View(this);
+            div.setLayoutParams(new LinearLayout.LayoutParams(-1, 1));
+            div.setBackgroundColor(0xFFEDF1F7);
+            l.addView(div);
+        }
+    }
+
+    private void addSmallLightBtn(LinearLayout parent, String text, int color, float dp, Runnable act) {
+        Button b = new Button(this);
+        b.setText(text);
+        b.setTextSize(12);
+        b.setTextColor(Color.WHITE);
+        b.setAllCaps(false);
+        android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable();
+        g.setColor(color);
+        g.setCornerRadius(8 * dp);
+        b.setBackground(g);
+        b.setOnClickListener(v -> act.run());
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, (int) (38 * dp));
+        lp.setMargins(0, (int) (6 * dp), (int) (8 * dp), (int) (6 * dp));
+        parent.addView(b, lp);
+    }
+
+    /** 单条事件编辑：触发条件/触发事件用下拉，其余 13 个字段按 熊 的字段表逐个输入。 */
+    private void fillBaseEventEditor(LinearLayout l, float dp,
+                                     FileParser.BtlHeaderInfo h, int idx) {
+        final byte[] btl = mapData.btlOriginalData;
+        final int addr = FileParser.eventStart(h) + idx * 44;
+        if (addr + 44 > btl.length) { baseDataEventEditIdx = -1; renderBaseDataSection(); return; }
+        final java.nio.ByteBuffer bb = java.nio.ByteBuffer.wrap(btl).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+        TextView t = new TextView(this);
+        t.setText("事件 #" + idx + "（0x" + Integer.toHexString(addr) + " 起 44 字节）");
+        t.setTextSize(15);
+        t.setTextColor(0xFF111827);
+        t.setTypeface(null, android.graphics.Typeface.BOLD);
+        l.addView(t);
+        lightInfo(l, "【触发方式】0 建筑被攻占 / 1 消灭单位 / 2 回合到 / 4 伴生事件\n"
+                + "【目标值】0 无变化 / 1 变轴心 / 2 变同盟 / 5 变中立", dp);
+        btlEventCondSp = makeSpinner(EVENT_COND_LABELS, indexOfVal(EVENT_COND_VALS, bb.getInt(addr + 0x8) & 0xFF));
+        btlEventTypeSp = makeSpinner(EVENT_TYPE_LABELS, indexOfVal(EVENT_TYPE_VALS, bb.getInt(addr + 0xC) & 0xFF));
+        addSpinnerRowLight(l, "触发条件(0x8)", btlEventCondSp);
+        addSpinnerRowLight(l, "触发事件(0xC)", btlEventTypeSp);
+        btlEventEds = new EditText[EVENT_FIELDS.length];
+        for (int i = 0; i < EVENT_FIELDS.length; i++) {
+            int off = Integer.parseInt(EVENT_FIELDS[i][2].substring(2), 16);
+            int val;
+            if (EVENT_FIELDS[i][1].equals("u32")) val = bb.getInt(addr + off);
+            else if (EVENT_FIELDS[i][1].equals("u16")) val = bb.getShort(addr + off) & 0xFFFF;
+            else val = btl[addr + off] & 0xFF;
+            btlEventEds[i] = addNumRowLight(l, EVENT_FIELDS[i][0] + "(" + EVENT_FIELDS[i][2] + ")", val);
+        }
+        btlEventEditIndex = idx;
+        LinearLayout tools = new LinearLayout(this);
+        tools.setOrientation(LinearLayout.HORIZONTAL);
+        addSmallLightBtn(tools, "保存事件", 0xFF22c55e, dp, this::saveBaseEvent);
+        addSmallLightBtn(tools, "复制此事件", 0xFF1e5fa8, dp, () -> saveBaseEventThen(() -> {
+            try {
+                int prev = FileParser.parseBTLHeader(mapData.btlOriginalData).eventCount;
+                int ni = FileParser.addEvent(mapData);
+                byte[] src = new byte[44];
+                FileParser.BtlHeaderInfo h2 = FileParser.parseBTLHeader(mapData.btlOriginalData);
+                int s2 = FileParser.eventStart(h2);
+                System.arraycopy(mapData.btlOriginalData, s2 + btlEventEditIndex * 44, src, 0, 44);
+                java.nio.ByteBuffer b3 = java.nio.ByteBuffer.wrap(src).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+                b3.putInt(0x00, ni);                       // 新事件的事件ID = 新序号
+                FileParser.patchEvent(mapData, ni, src);
+                baseDataEventEditIdx = ni;
+                hexMapView.refresh(); updateInfo();
+                renderBaseDataSection();
+                Toast.makeText(this, "已复制为事件 #" + ni + "（原共 " + prev + " 条）", Toast.LENGTH_SHORT).show();
+            } catch (Exception e) {
+                Toast.makeText(this, "复制失败: " + e.getMessage(), Toast.LENGTH_LONG).show();
+            }
+        }));
+        addSmallLightBtn(tools, "删除此事件", 0xFFb91c1c, dp, () -> {
+            try {
+                FileParser.removeEvent(mapData, btlEventEditIndex);
+                baseDataEventEditIdx = -1;
+                hexMapView.refresh(); updateInfo();
+                renderBaseDataSection();
+                Toast.makeText(this, "已删除该事件", Toast.LENGTH_SHORT).show();
+            } catch (Exception e) {
+                Toast.makeText(this, "删除失败: " + e.getMessage(), Toast.LENGTH_LONG).show();
+            }
+        });
+        addSmallLightBtn(tools, "返回列表", 0xFF6b7280, dp, () -> {
+            baseDataEventEditIdx = -1;
+            renderBaseDataSection();
+        });
+        addSmallLightBtn(tools, "说明", 0xFF6b7280, dp, this::showEventHelp);
+        l.addView(tools);
+    }
+
+    /** 先保存（若在编辑态）再执行别的动作。 */
+    private void saveBaseEventThen(Runnable after) {
+        try { saveBaseEventSilent(); } catch (Exception ignored) {
+        }
+        if (after != null) after.run();
+    }
+
+    private void saveBaseEvent() {
+        try {
+            saveBaseEventSilent();
+            Toast.makeText(this, "事件已保存", Toast.LENGTH_SHORT).show();
+            baseDataEventEditIdx = -1;
+            renderBaseDataSection();
+        } catch (Exception e) {
+            Toast.makeText(this, "保存失败: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void saveBaseEventSilent() throws Exception {
+        if (btlEventEditIndex < 0 || btlEventEds == null) return;
+        FileParser.BtlHeaderInfo h = FileParser.parseBTLHeader(mapData.btlOriginalData);
+        int start = FileParser.eventStart(h);
+        byte[] raw = new byte[44];
+        System.arraycopy(mapData.btlOriginalData, start + btlEventEditIndex * 44, raw, 0, 44);
+        java.nio.ByteBuffer b2 = java.nio.ByteBuffer.wrap(raw).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+        for (int i = 0; i < EVENT_FIELDS.length && i < btlEventEds.length; i++) {
+            int off = Integer.parseInt(EVENT_FIELDS[i][2].substring(2), 16);
+            int val = Integer.parseInt(btlEventEds[i].getText().toString().trim());
+            if (EVENT_FIELDS[i][1].equals("u32")) b2.putInt(off, val);
+            else if (EVENT_FIELDS[i][1].equals("u16")) b2.putShort(off, (short) val);
+            else raw[off] = (byte) val;
+        }
+        b2.putInt(0x8, EVENT_COND_VALS[btlEventCondSp.getSelectedItemPosition()]);
+        b2.putInt(0xC, EVENT_TYPE_VALS[btlEventTypeSp.getSelectedItemPosition()]);
+        FileParser.patchEvent(mapData, btlEventEditIndex, raw);
+        hexMapView.refresh();
+    }
+
+    /** 事件说明（与熊编辑器 事件.ini 一致）。 */
+    private void showEventHelp() {
+        new AlertDialog.Builder(this, R.style.DarkDialog)
+                .setTitle("事件说明")
+                .setMessage("【事件触发方式】(0x8)\n"
+                        + "0 = 带事件的建筑被攻占\n1 = 消灭单位\n2 = 回合到\n4 = 伴生事件\n\n"
+                        + "【事件类型】(0xC)\n"
+                        + "0 士气上升\n1 士气下降\n2 士气双降\n3 混乱\n4 无效果\n"
+                        + "6 AI变化(整个军团都变)\n7 叛变\n8 集结\n10 立刻获得金币\n"
+                        + "11 立刻获得工业\n12 立刻获得科技\n13 刷兵事件\n14 军团归属给玩家\n\n"
+                        + "【目标值说明】事件 0x18-0x1B 字段\n0 = 无变化\n1 = 变为轴心国\n"
+                        + "2 = 变为同盟国\n5 = 变为中立国\n\n"
+                        + "【字段表（与熊编辑器一致）】\n"
+                        + "0x0 事件ID　0x4 关联事件　0x6 关联事件延迟\n"
+                        + "0x8 触发条件　0xC 触发事件\n0x10 触发军团　0x14 加成军团\n"
+                        + "0x18 目标值　0x1C 触发条件低　0x1E CountryRecordId\n"
+                        + "0x20 触发回合　0x22 禁用种子　0x23 接近距离\n"
+                        + "0x24 对话代码　0x28 默认结束段")
+                .setPositiveButton("知道了", null)
+                .show();
+    }
+
     private EditText addNumRowLight(LinearLayout parent, String label, int value) {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
@@ -4682,140 +4924,6 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
             case 17: return "加工业";
             case 18: return "加科技";
             default: return String.format(java.util.Locale.US, "0x%02X", v);
-        }
-    }
-
-    /** 事件列表页：一行一条，点击进入编辑页。 */
-    private void showBtlEventListOverlay() {
-        if (mapData == null || mapData.btlOriginalData == null) return;
-        final byte[] btl = mapData.btlOriginalData;
-        final FileParser.BtlHeaderInfo h = FileParser.parseBTLHeader(btl);
-        final int start = FileParser.eventStart(h);
-        final java.nio.ByteBuffer bb = java.nio.ByteBuffer.wrap(btl)
-                .order(java.nio.ByteOrder.LITTLE_ENDIAN);
-        btlEventListPanel.removeAllViews();
-        btlEventListPanel.addView(makeOverlayHeader("事件列表（点击进入编辑）",
-                () -> btlEventListOverlay.setVisibility(View.GONE),
-                () -> btlEventListOverlay.setVisibility(View.GONE)));
-        ScrollView sv = new ScrollView(this);
-        LinearLayout l = new LinearLayout(this);
-        l.setOrientation(LinearLayout.VERTICAL);
-        for (int i = 0; i < h.eventCount; i++) {
-            int addr = start + i * 44;
-            if (addr + 44 > btl.length) break;
-            final int idx = i;
-            LinearLayout row = new LinearLayout(this);
-            row.setOrientation(LinearLayout.HORIZONTAL);
-            row.setGravity(Gravity.CENTER_VERTICAL);
-            row.setPadding(6, 10, 6, 10);
-            row.setClickable(true);
-            row.setBackgroundColor(Color.parseColor("#1e293b"));
-            row.setOnClickListener(v -> {
-                btlEventListOverlay.setVisibility(View.GONE);
-                showBtlEventDetailOverlay(idx);
-            });
-            TextView tv = new TextView(this);
-            tv.setText(String.format(java.util.Locale.US,
-                    "事件 #%d   触发条件:%s   触发事件:%s   回合:%d",
-                    idx, eventCondLabel(btl[addr + 0x8] & 0xFF),
-                    eventTypeLabel(btl[addr + 0xC] & 0xFF), bb.getInt(addr + 0x20)));
-            tv.setTextSize(14);
-            tv.setTextColor(Color.WHITE);
-            row.addView(tv);
-            l.addView(row);
-            View div = new View(this);
-            div.setBackgroundColor(0x22FFFFFF);
-            div.setLayoutParams(new LinearLayout.LayoutParams(-1, 1));
-            l.addView(div);
-        }
-        sv.addView(l);
-        btlEventListPanel.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1));
-        btlEventListOverlay.setVisibility(View.VISIBLE);
-    }
-
-    /** 单个事件编辑页：触发条件/触发事件下拉，其余数值可改。 */
-    private void showBtlEventDetailOverlay(final int idx) {
-        if (mapData == null || mapData.btlOriginalData == null) return;
-        btlEventEditIndex = idx;
-        final byte[] btl = mapData.btlOriginalData;
-        final FileParser.BtlHeaderInfo h = FileParser.parseBTLHeader(btl);
-        final int addr = FileParser.eventStart(h) + idx * 44;
-        final java.nio.ByteBuffer bb = java.nio.ByteBuffer.wrap(btl)
-                .order(java.nio.ByteOrder.LITTLE_ENDIAN);
-        if (addr + 44 > btl.length) {
-            Toast.makeText(this, "事件记录越界", Toast.LENGTH_SHORT).show();
-            return;
-        }
-        btlEventDetailPanel.removeAllViews();
-        btlEventDetailPanel.addView(makeOverlayHeader("事件 #" + idx,
-                () -> {
-                    btlEventDetailOverlay.setVisibility(View.GONE);
-                    showBtlEventListOverlay();
-                },
-                () -> btlEventDetailOverlay.setVisibility(View.GONE)));
-        ScrollView sv = new ScrollView(this);
-        LinearLayout l = new LinearLayout(this);
-        l.setOrientation(LinearLayout.VERTICAL);
-
-        int[] condVals = {0, 1, 2, 4};
-        int[] typeVals = {0, 1, 2, 3, 4, 6, 7, 8, 16, 17, 18};
-        String[] condLabels = {"00 占城触发", "01 单位死亡", "02 回合触发", "04 连带触发"};
-        String[] typeLabels = {"00 士气上升", "01 士气下降", "02 士气大降", "03 混乱",
-                "04 调用对话", "06 方针转变", "07 阵营变化", "08 向某方位移动",
-                "10 加钱", "11 加工业", "12 加科技"};
-        btlEventCondSp = makeSpinner(condLabels, indexOfVal(condVals, btl[addr + 0x8] & 0xFF));
-        btlEventTypeSp = makeSpinner(typeLabels, indexOfVal(typeVals, btl[addr + 0xC] & 0xFF));
-        addSpinnerRow(l, "触发条件", btlEventCondSp);
-        addSpinnerRow(l, "触发事件", btlEventTypeSp);
-        btlEventEds = new EditText[7];
-        btlEventEds[0] = addNumRow(l, "序号", bb.getInt(addr + 0x0));
-        btlEventEds[1] = addNumRow(l, "关联事件", bb.getInt(addr + 0x4));
-        btlEventEds[2] = addNumRow(l, "触发军团", bb.getInt(addr + 0x10));
-        btlEventEds[3] = addNumRow(l, "加成军团", bb.getInt(addr + 0x14));
-        btlEventEds[4] = addNumRow(l, "阵营变换", bb.getInt(addr + 0x18));
-        btlEventEds[5] = addNumRow(l, "触发回合", bb.getInt(addr + 0x20));
-        btlEventEds[6] = addNumRow(l, "对话代码", bb.getInt(addr + 0x24));
-
-        Button saveBtn = new Button(this);
-        saveBtn.setText("保存事件");
-        saveBtn.setTextSize(13);
-        saveBtn.setTextColor(Color.WHITE);
-        saveBtn.setBackgroundColor(Color.parseColor("#22c55e"));
-        saveBtn.setOnClickListener(v -> saveBtlEvent());
-        l.addView(saveBtn);
-
-        sv.addView(l);
-        btlEventDetailPanel.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1));
-        btlEventDetailOverlay.setVisibility(View.VISIBLE);
-    }
-
-    private void saveBtlEvent() {
-        try {
-            if (btlEventEditIndex < 0 || btlEventEds == null) return;
-            FileParser.BtlHeaderInfo h = FileParser.parseBTLHeader(mapData.btlOriginalData);
-            int start = FileParser.eventStart(h);
-            byte[] raw = new byte[44];
-            System.arraycopy(mapData.btlOriginalData, start + btlEventEditIndex * 44, raw, 0, 44);
-            java.nio.ByteBuffer b2 = java.nio.ByteBuffer.wrap(raw)
-                    .order(java.nio.ByteOrder.LITTLE_ENDIAN);
-            int[] condVals = {0, 1, 2, 4};
-            int[] typeVals = {0, 1, 2, 3, 4, 6, 7, 8, 16, 17, 18};
-            b2.putInt(0x0, Integer.parseInt(btlEventEds[0].getText().toString().trim()));
-            b2.putInt(0x4, Integer.parseInt(btlEventEds[1].getText().toString().trim()));
-            b2.putInt(0x10, Integer.parseInt(btlEventEds[2].getText().toString().trim()));
-            b2.putInt(0x14, Integer.parseInt(btlEventEds[3].getText().toString().trim()));
-            b2.putInt(0x18, Integer.parseInt(btlEventEds[4].getText().toString().trim()));
-            b2.putInt(0x20, Integer.parseInt(btlEventEds[5].getText().toString().trim()));
-            b2.putInt(0x24, Integer.parseInt(btlEventEds[6].getText().toString().trim()));
-            raw[0x8] = (byte) condVals[btlEventCondSp.getSelectedItemPosition()];
-            raw[0xC] = (byte) typeVals[btlEventTypeSp.getSelectedItemPosition()];
-            FileParser.patchEvent(mapData, btlEventEditIndex, raw);
-            hexMapView.refresh();
-            btlEventDetailOverlay.setVisibility(View.GONE);
-            Toast.makeText(this, "事件已保存", Toast.LENGTH_SHORT).show();
-            showBtlEventListOverlay();
-        } catch (Exception e) {
-            Toast.makeText(this, "保存失败: " + e.getMessage(), Toast.LENGTH_LONG).show();
         }
     }
 
