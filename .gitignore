@@ -43,3 +43,16 @@ app/build/
 # app/src/main/assets/btl/
 tools/__pycache__/
 *.pyc
+
+# 本地参考资料 / 别的编辑器工程（不上传 GitHub，仅本机保留）
+晓雄编辑器/
+BTL编辑器源码还原/
+枭雄HTML/
+BTL编辑器Web/
+WC4SaveManager/
+html2apkdemo_src/
+旧编辑器源码/
+光宇*/
+高中物理*.docx
+layout_preview.html
+layout_preview_img/
