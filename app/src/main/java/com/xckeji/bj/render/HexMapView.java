@@ -586,18 +586,15 @@ public class HexMapView extends View {
     }
 
     /**
-     * 取国旗位图：优先按国家 ID 找 flag_&lt;ID&gt;.png（模组的国旗编号就是国家ID），
-     * 找不到再退到 CountrySettings.json 的 Logo 编号，仍然没有就不画。
+     * 取国旗位图：**按国家 ID** 找 flag_&lt;ID&gt;.png（模组的国旗编号就是国家ID）。
+     * 注意不要用 CountrySettings.json 的 Logo 兜底——模组里「俄罗斯」Id=66 的 Logo 写的是 5（苏联），
+     * 用它就会把苏联旗显示成俄罗斯的旗。没有对应文件就不画旗。
      */
     private Bitmap flagFor(int country) {
         if (country <= 0) return null;
         Bitmap b = flagBmps == null ? null : flagBmps.get(country);
         if (b == null) {
             b = load("flag/flag_" + country + ".png");
-            if (b == null) {
-                int logo = com.xckeji.bj.model.CountryData.logo(country);
-                if (logo > 0 && logo != country) b = load("flag/flag_" + logo + ".png");
-            }
             if (b != null && flagBmps != null) flagBmps.put(country, b);
         }
         return b;
