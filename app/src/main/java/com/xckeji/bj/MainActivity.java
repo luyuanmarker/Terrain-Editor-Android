@@ -2060,6 +2060,8 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
 
     /** 通过拦截检查后，正式初始化编辑器（被拦截设备在后台移除后放行时也会走到这里）。 */
     private void initEditorAfterLaunch() {
+        // 先确定当前使用的模组（有的话），后面的素材/json 都会优先走模组
+        com.xckeji.bj.mod.ModAssets.init(this);
         loadThumbs();
         // 兵种数据必须在 buildUI() 之前加载，右侧面板的兵种图标栏才会显示图标
         try {
@@ -2072,6 +2074,10 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         }
         try {
             GeneralData.loadSkills(readAssetBytes("json/SkillSettings.json"));
+        } catch (Exception ignored) {
+        }
+        try {   // 模组的国家名（内置 assets 没有这个文件，没模组时走不到）
+            CountryData.load(readAssetBytes("json/CountrySettings.json"));
         } catch (Exception ignored) {
         }
         getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN);
@@ -2623,8 +2629,8 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
     }
 
     private Bitmap loadBmp(String path) {
-        try { return BitmapFactory.decodeStream(getAssets().open(path)); }
-        catch (Exception e) { return null; }
+        // 有导入模组时优先用模组素材，没有的再回退内置 assets
+        return com.xckeji.bj.mod.ModAssets.decode(this, path);
     }
 
     /** 从 assets/flag/ 加载国家国旗：国家 ID -> flag_N.png（加载一次缓存复用）。 */
@@ -3104,6 +3110,12 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         baseDataOverlay.setVisibility(View.GONE);
         rootFrame.addView(baseDataOverlay);
 
+        // 模组页（全屏白渐变）
+        modOverlay = new FrameLayout(this);
+        modOverlay.setLayoutParams(new FrameLayout.LayoutParams(-1, -1));
+        modOverlay.setVisibility(View.GONE);
+        rootFrame.addView(modOverlay);
+
 
         // FPS / 设备 / 版本号：最后加入 rootFrame，永远在最顶层，不被覆盖
         rootFrame.addView(infoPanel, infoLp);
@@ -3237,6 +3249,23 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         aboutLp.bottomMargin = (int) (14 * dp);
         aboutBtn.setOnClickListener(v -> showAboutPage());
         homeOverlay.addView(aboutBtn, aboutLp);
+
+        // 左下角：「模组」按钮（不用先打开地图就能导入模组素材）
+        Button modBtn = new Button(this);
+        modBtn.setText("模组");
+        modBtn.setTextColor(Color.WHITE);
+        modBtn.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, btnH * 0.30f);
+        modBtn.setAllCaps(false);
+        modBtn.setTypeface(null, android.graphics.Typeface.BOLD);
+        modBtn.setShadowLayer(4f, 0f, 1f, 0x99000000);
+        modBtn.setPadding((int) (6 * dp), 0, (int) (6 * dp), 0);
+        modBtn.setBackground(aboutButtonBackground(dp));
+        FrameLayout.LayoutParams modLp = new FrameLayout.LayoutParams(
+                (int) (78 * dp), (int) (40 * dp), Gravity.LEFT | Gravity.BOTTOM);
+        modLp.leftMargin = (int) (14 * dp);
+        modLp.bottomMargin = (int) (14 * dp);
+        modBtn.setOnClickListener(v -> showModPage());
+        homeOverlay.addView(modBtn, modLp);
 
         rootFrame.addView(homeOverlay);
     }
@@ -3673,11 +3702,12 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         java.util.List<Runnable> acts = new java.util.ArrayList<>();
         acts.add(() -> showBaseDataPage());
         acts.add(() -> openDataPanel());
+        acts.add(() -> showModPage());
         acts.add(() -> {
             if (rightPanel == null) return;
             rightPanel.setVisibility(panelVisible ? View.GONE : View.VISIBLE);
         });
-        showDropdownMenu(anchor, new String[]{"基础数据", "数据面板",
+        showDropdownMenu(anchor, new String[]{"基础数据", "数据面板", "模组…",
                 (panelVisible ? "隐藏属性面板" : "显示属性面板")}, acts);
     }
 
@@ -4310,6 +4340,260 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
     }
 
     /** BTL 主数据 + 事件编辑：胜利条件/战役时代/事件触发条件/触发事件均为下拉单选框。 */
+    // ================= 模组（导入素材 / 切换 / 打开模组地图 / 保存回写） =================
+    private FrameLayout modOverlay;
+    private LinearLayout modContentHost;
+    private static final int REQUEST_MOD_TREE = 310;
+    private static final int REQUEST_MOD_APK = 311;
+    private long lastImportMs = 0L;
+
+    /** 导入后立刻刷新素材（图标/贴图/配置都在 onCreate 里读，这里重新载入一遍）。 */
+    private void reloadAssetsAfterModChange() {
+        try {
+            flagIcons = null; buildingThumbs = null;
+            ArmyConfig.load(readAssetBytes("json/ArmySettings.json"));
+            GeneralData.load(readAssetBytes("json/GeneralSettings.json"));
+            try { GeneralData.loadSkills(readAssetBytes("json/SkillSettings.json")); } catch (Exception ignored) { }
+            try { CountryData.load(readAssetBytes("json/CountrySettings.json")); } catch (Exception ignored) { }
+        } catch (Exception ignored) { }
+        if (hexMapView != null) {
+            hexMapView.clearCachesForModChange();
+            hexMapView.refresh();
+        }
+    }
+
+    /** 「模组」页：导入 / 切换 / 删除 / 打开模组里的地图。 */
+    private void showModPage() {
+        final float dp = getResources().getDisplayMetrics().density;
+        android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable(
+                android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{0xFFFFFFFF, 0xFFF5F7FB, 0xFFE6EBF3});
+        modOverlay.setBackground(bg);
+        modOverlay.removeAllViews();
+        try { modOverlay.bringToFront(); } catch (Exception ignored) { }   // 首页点进来时要在最上层
+        modContentHost = new LinearLayout(this);
+        modContentHost.setOrientation(LinearLayout.VERTICAL);
+        modOverlay.addView(modContentHost, new FrameLayout.LayoutParams(-1, -1));
+        renderModPage();
+        modOverlay.setVisibility(View.VISIBLE);
+        android.util.Log.i("MOD", "go=" + lastImportMs);   // 防止被优化掉，无实际作用
+    }
+
+    private void renderModPage() {
+        final float dp = getResources().getDisplayMetrics().density;
+        modContentHost.removeAllViews();
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding((int) (12 * dp), (int) (10 * dp), (int) (12 * dp), (int) (10 * dp));
+        modContentHost.addView(root, new LinearLayout.LayoutParams(-1, -1));
+
+        // 顶栏
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setGravity(Gravity.CENTER_VERTICAL);
+        Button back = new Button(this);
+        back.setText("← 返回");
+        back.setTextSize(13);
+        back.setTextColor(Color.WHITE);
+        back.setAllCaps(false);
+        back.setBackground(baseDataBackBg(dp));
+        back.setOnClickListener(v -> modOverlay.setVisibility(View.GONE));
+        bar.addView(back, new LinearLayout.LayoutParams((int) (92 * dp), (int) (40 * dp)));
+        TextView title = new TextView(this);
+        title.setText("  模组素材");
+        title.setTextSize(18);
+        title.setTextColor(0xFF1f2937);
+        title.setTypeface(null, android.graphics.Typeface.BOLD);
+        bar.addView(title);
+        root.addView(bar);
+
+        String cur = com.xckeji.bj.mod.ModAssets.currentMod();
+        TextView curTv = new TextView(this);
+        curTv.setText(cur == null ? "当前使用：内置素材（未导入模组）" : "当前使用：模组「" + cur + "」");
+        curTv.setTextSize(14);
+        curTv.setTextColor(cur == null ? 0xFF6b7280 : 0xFF166534);
+        curTv.setPadding(0, (int) (8 * dp), 0, (int) (6 * dp));
+        root.addView(curTv);
+
+        LinearLayout tools = new LinearLayout(this);
+        tools.setOrientation(LinearLayout.HORIZONTAL);
+        addSmallLightBtn(tools, "＋ 导入模组（文件夹）", 0xFF1e5fa8, dp, () -> {
+            Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                    | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+            try {
+                startActivityForResult(i, REQUEST_MOD_TREE);
+            } catch (Exception e) {
+                Toast.makeText(this, "打不开文件夹选择器：" + e.getMessage(), Toast.LENGTH_LONG).show();
+            }
+        });
+        addSmallLightBtn(tools, "＋ 导入模组 apk", 0xFF7c3aed, dp, () -> {
+            Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            i.addCategory(Intent.CATEGORY_OPENABLE);
+            i.setType("*/*");
+            try {
+                startActivityForResult(i, REQUEST_MOD_APK);
+            } catch (Exception e) {
+                Toast.makeText(this, "打不开文件选择器：" + e.getMessage(), Toast.LENGTH_LONG).show();
+            }
+        });
+        if (cur != null) {
+            addSmallLightBtn(tools, "改用内置素材", 0xFF6b7280, dp, () -> {
+                com.xckeji.bj.mod.ModAssets.setCurrent(this, null);
+                reloadAssetsAfterModChange();
+                renderModPage();
+                Toast.makeText(this, "已切回内置素材", Toast.LENGTH_SHORT).show();
+            });
+        }
+        root.addView(tools);
+
+        // 已导入模组列表
+        java.util.List<String> mods = com.xckeji.bj.mod.ModAssets.list(this);
+        TextView listTitle = new TextView(this);
+        listTitle.setText(mods.isEmpty() ? "还没有导入模组" : "已导入模组（" + mods.size() + " 个）");
+        listTitle.setTextSize(14);
+        listTitle.setTextColor(0xFF111827);
+        listTitle.setTypeface(null, android.graphics.Typeface.BOLD);
+        listTitle.setPadding(0, (int) (10 * dp), 0, (int) (4 * dp));
+        root.addView(listTitle);
+
+        LinearLayout listBox = new LinearLayout(this);
+        listBox.setOrientation(LinearLayout.VERTICAL);
+        for (final String name : mods) {
+            java.io.File dir = new java.io.File(com.xckeji.bj.mod.ModAssets.modsBase(this), name);
+            long sz = com.xckeji.bj.mod.ModAssets.sizeOf(dir);
+            boolean active = name.equals(cur);
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding((int) (6 * dp), (int) (6 * dp), (int) (6 * dp), (int) (6 * dp));
+            TextView tv = new TextView(this);
+            tv.setText((active ? "● " : "○ ") + name + "　" + (sz / 1024 / 1024) + "MB"
+                    + (active ? "　（使用中）" : ""));
+            tv.setTextSize(13);
+            tv.setTextColor(active ? 0xFF166534 : 0xFF1f2937);
+            tv.setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1f));
+            row.addView(tv);
+            if (!active) {
+                Button use = new Button(this);
+                use.setText("使用");
+                use.setTextSize(12);
+                use.setTextColor(Color.WHITE);
+                use.setAllCaps(false);
+                android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable();
+                g.setColor(0xFF1e5fa8);
+                g.setCornerRadius(8 * dp);
+                use.setBackground(g);
+                use.setOnClickListener(v -> {
+                    com.xckeji.bj.mod.ModAssets.setCurrent(this, name);
+                    reloadAssetsAfterModChange();
+                    renderModPage();
+                    Toast.makeText(this, "已切换到模组「" + name + "」", Toast.LENGTH_SHORT).show();
+                });
+                row.addView(use, new LinearLayout.LayoutParams((int) (64 * dp), (int) (34 * dp)));
+            }
+            Button del = new Button(this);
+            del.setText("删除");
+            del.setTextSize(12);
+            del.setTextColor(Color.WHITE);
+            del.setAllCaps(false);
+            android.graphics.drawable.GradientDrawable gd = new android.graphics.drawable.GradientDrawable();
+            gd.setColor(0xFFb91c1c);
+            gd.setCornerRadius(8 * dp);
+            del.setBackground(gd);
+            del.setOnClickListener(v -> new AlertDialog.Builder(this, R.style.DarkDialog)
+                    .setTitle("删除模组")
+                    .setMessage("确定删除已导入的「" + name + "」素材？（手机上的原始模组文件夹不受影响）")
+                    .setNegativeButton("取消", null)
+                    .setPositiveButton("删除", (d2, w2) -> {
+                        com.xckeji.bj.mod.ModAssets.delete(this, name);
+                        reloadAssetsAfterModChange();
+                        renderModPage();
+                    }).show());
+            LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams((int) (64 * dp), (int) (34 * dp));
+            dlp.setMargins((int) (6 * dp), 0, 0, 0);
+            row.addView(del, dlp);
+            listBox.addView(row);
+            View div = new View(this);
+            div.setLayoutParams(new LinearLayout.LayoutParams(-1, 1));
+            div.setBackgroundColor(0xFFEDF1F7);
+            listBox.addView(div);
+        }
+        root.addView(listBox);
+
+        // 当前模组的 stage/*.btl 列表（点开直接编辑，保存回写）
+        if (cur != null) {
+            TextView mapTitle = new TextView(this);
+            mapTitle.setText("模组里的地图（assets/stage/，点一个打开）");
+            mapTitle.setTextSize(14);
+            mapTitle.setTextColor(0xFF111827);
+            mapTitle.setTypeface(null, android.graphics.Typeface.BOLD);
+            mapTitle.setPadding(0, (int) (12 * dp), 0, (int) (4 * dp));
+            root.addView(mapTitle);
+            ScrollView sv = new ScrollView(this);
+            LinearLayout maps = new LinearLayout(this);
+            maps.setOrientation(LinearLayout.VERTICAL);
+            java.util.List<com.xckeji.bj.mod.ModMaps.Entry> entries =
+                    com.xckeji.bj.mod.ModMaps.list(this, cur);
+            if (entries.isEmpty()) {
+                TextView none = new TextView(this);
+                none.setText("读不到 stage/ 目录（模组位置可能已失效，重新导入一次即可）");
+                none.setTextSize(12);
+                none.setTextColor(0xFF6b7280);
+                maps.addView(none);
+            }
+            for (final com.xckeji.bj.mod.ModMaps.Entry e : entries) {
+                LinearLayout row = new LinearLayout(this);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                row.setGravity(Gravity.CENTER_VERTICAL);
+                row.setPadding((int) (6 * dp), (int) (7 * dp), (int) (6 * dp), (int) (7 * dp));
+                row.setClickable(true);
+                row.setOnClickListener(v -> openModMap(cur, e));
+                TextView tv = new TextView(this);
+                tv.setText("[" + e.kind() + "] " + e.name);
+                tv.setTextSize(13);
+                tv.setTextColor(0xFF1f2937);
+                row.addView(tv);
+                maps.addView(row);
+                View div = new View(this);
+                div.setLayoutParams(new LinearLayout.LayoutParams(-1, 1));
+                div.setBackgroundColor(0xFFEDF1F7);
+                maps.addView(div);
+            }
+            sv.addView(maps);
+            root.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1f));
+        } else {
+            root.addView(new View(this), new LinearLayout.LayoutParams(-1, 0, 1f));
+        }
+    }
+
+    /** 从模组里打开一张地图：读字节 → 进编辑器 → 记住回写目标。 */
+    private void openModMap(final String modName, final com.xckeji.bj.mod.ModMaps.Entry e) {
+        try {
+            byte[] data = com.xckeji.bj.mod.ModMaps.read(this, modName, e);
+            history.clear();
+            mapData = FileParser.loadFile(data, e.name);
+            currentFileName = e.name;
+            modMapTarget = e;
+            modMapOriginal = data;
+            hexMapView.setMapData(mapData);
+            if (!FileParser.parseBTLHeader(data).independentTerrain) {
+                Toast.makeText(this, "这是征服/截取地图，还需要用「打开地图」加载 world*.bin 才能改地形",
+                        Toast.LENGTH_LONG).show();
+            }
+            modOverlay.setVisibility(View.GONE);
+            enterEditorAfterLoad();
+            Toast.makeText(this, "已打开模组地图：" + e.name + "\n保存时会覆盖回模组并自动备份",
+                    Toast.LENGTH_LONG).show();
+        } catch (Exception ex) {
+            Toast.makeText(this, "打开失败：" + ex.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    /** 当前地图是从模组里打开的（保存时要回写）。 */
+    private com.xckeji.bj.mod.ModMaps.Entry modMapTarget;
+    private byte[] modMapOriginal;
+
     // ================= 基础数据（全屏白渐变：按钮并排居中，点哪个就整屏显示哪个） =================
     private FrameLayout baseDataOverlay;
     private LinearLayout baseDataSectionHost;
@@ -7320,7 +7604,8 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
     }
 
     private byte[] readAssetBytes(String assetName) throws IOException {
-        InputStream input = getAssets().open(assetName);
+        // 模组优先，缺的回退内置 assets
+        InputStream input = com.xckeji.bj.mod.ModAssets.open(this, assetName);
         try {
             byte[] bytes = new byte[input.available()];
             int offset = 0;
@@ -7849,6 +8134,17 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
             FileOutputStream fos = new FileOutputStream(outFile);
             fos.write(data);
             fos.close();
+            // 从模组里打开的地图：直接覆盖回模组那个 btl（覆盖前自动备份到 地图编辑器/模组备份/）
+            String modNote = "";
+            if (modMapTarget != null && isBTL) {
+                String modName = com.xckeji.bj.mod.ModAssets.currentMod();
+                if (modName != null) {
+                    String bak = com.xckeji.bj.mod.ModMaps.writeBack(this, modName, modMapTarget, data, modMapOriginal);
+                    modMapOriginal = data;          // 再保存一次时，备份的就是上一版
+                    modNote = "\n已覆盖回模组：" + modName + "/assets/stage/" + modMapTarget.name
+                            + (bak != null ? "\n备份：" + bak : "\n（备份失败，请检查存储权限）");
+                }
+            }
             // 征服地图：地形在世界 BIN 中，一并保存（保留原文件名与省规划段）
             if (mapData.binOriginalData != null && mapData.btlOriginalData != null) {
                 byte[] binData = FileParser.saveAsBIN(mapData);
@@ -7859,11 +8155,11 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
                 bos.write(binData);
                 bos.close();
                 Toast.makeText(this, "✅ 已生成文件：\n" + outFile.getName() + "\n"
-                        + binOut.getName() + "\n位置：" + dir.getAbsolutePath() + waterNote,
+                        + binOut.getName() + "\n位置：" + dir.getAbsolutePath() + waterNote + modNote,
                         Toast.LENGTH_LONG).show();
                 return;
             }
-            Toast.makeText(this,"✅ 已保存到: " + outFile.getAbsolutePath() + waterNote,Toast.LENGTH_LONG).show();
+            Toast.makeText(this,"✅ 已保存到: " + outFile.getAbsolutePath() + waterNote + modNote,Toast.LENGTH_LONG).show();
         }catch(Exception e){
             android.util.Log.e("SAVE","error",e);
             Toast.makeText(this,"❌ 保存失败: "+e.getMessage(),Toast.LENGTH_LONG).show();
@@ -8042,6 +8338,78 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
             } catch (Exception e) {
                 Toast.makeText(this, "底图加载失败: " + e.getMessage(), Toast.LENGTH_LONG).show();
             }
+        } else if (req == REQUEST_MOD_APK && res == RESULT_OK && data != null && data.getData() != null) {
+            final android.net.Uri apkUri = data.getData();
+            String apkName = "模组";
+            try {   // 取文件名当模组名
+                android.database.Cursor c = getContentResolver().query(apkUri, null, null, null, null);
+                if (c != null) {
+                    try {
+                        if (c.moveToFirst()) {
+                            int i = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME);
+                            if (i >= 0) apkName = c.getString(i);
+                        }
+                    } finally { c.close(); }
+                }
+            } catch (Exception ignored) { }
+            final String apkNameF = apkName;
+            final AlertDialog prog2 = new AlertDialog.Builder(this, R.style.DarkDialog)
+                    .setTitle("正在从 apk 导入模组…")
+                    .setMessage("只读取需要的图集/配置，不整包解压")
+                    .setCancelable(false)
+                    .create();
+            prog2.show();
+            new Thread(() -> {
+                com.xckeji.bj.mod.ModImporter.Result rr = com.xckeji.bj.mod.ModImporter.importFromApk(
+                        this, apkUri, apkNameF, msg -> runOnUiThread(() -> {
+                            try { prog2.setMessage(msg); } catch (Exception ignored) { }
+                        }));
+                runOnUiThread(() -> {
+                    try { prog2.dismiss(); } catch (Exception ignored) { }
+                    if (rr.ok()) {
+                        com.xckeji.bj.mod.ModAssets.setCurrent(this, rr.name);
+                        reloadAssetsAfterModChange();
+                    }
+                    new AlertDialog.Builder(this, R.style.DarkDialog)
+                            .setTitle(rr.ok() ? "导入完成" : "导入失败")
+                            .setMessage(rr.summary()
+                                    + (rr.ok() ? "\n注意：apk 模式只导入素材，想「打开模组地图/保存回写」请用文件夹模式导入。" : ""))
+                            .setPositiveButton("好", null)
+                            .show();
+                    if (modOverlay != null && modOverlay.getVisibility() == View.VISIBLE) renderModPage();
+                });
+            }).start();
+        } else if (req == REQUEST_MOD_TREE && res == RESULT_OK && data != null && data.getData() != null) {
+            final android.net.Uri treeUri = data.getData();
+            try {   // 拿到长期读写权限，之后打开/回写模组里的地图才能用
+                getContentResolver().takePersistableUriPermission(treeUri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+            } catch (Exception ignored) { }
+            final AlertDialog prog = new AlertDialog.Builder(this, R.style.DarkDialog)
+                    .setTitle("正在导入模组…")
+                    .setMessage("读取图集、配置…")
+                    .setCancelable(false)
+                    .create();
+            prog.show();
+            new Thread(() -> {
+                com.xckeji.bj.mod.ModImporter.Result rr = com.xckeji.bj.mod.ModImporter.importFromTree(
+                        this, treeUri, msg -> runOnUiThread(() -> {
+                            try { prog.setMessage(msg); } catch (Exception ignored) { }
+                        }));
+                runOnUiThread(() -> {
+                    try { prog.dismiss(); } catch (Exception ignored) { }
+                    if (rr.ok()) {
+                        com.xckeji.bj.mod.ModAssets.setCurrent(this, rr.name);
+                        reloadAssetsAfterModChange();
+                    }
+                    new AlertDialog.Builder(this, R.style.DarkDialog)
+                            .setTitle(rr.ok() ? "导入完成" : "导入失败")
+                            .setMessage(rr.summary())
+                            .setPositiveButton("好", null)
+                            .show();
+                    if (modOverlay != null && modOverlay.getVisibility() == View.VISIBLE) renderModPage();
+                });
+            }).start();
         } else if (req == REQUEST_TERRAIN_IMAGE && res == RESULT_OK && data != null && data.getData() != null) {
             try {
                 Uri uri = data.getData();

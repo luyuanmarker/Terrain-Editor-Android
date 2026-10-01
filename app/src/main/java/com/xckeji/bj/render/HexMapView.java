@@ -187,9 +187,8 @@ public class HexMapView extends View {
     }
 
     private Bitmap load(String path) {
-        try {
-            return BitmapFactory.decodeStream(getContext().getAssets().open(path));
-        } catch (Exception e) { return null; }
+        // 模组优先，缺的回退内置 assets
+        return com.xckeji.bj.mod.ModAssets.decode(getContext(), path);
     }
 
     public void setMapData(MapData data) {
@@ -992,6 +991,21 @@ public class HexMapView extends View {
     /** 按当前地图尺寸重新从底图采样每格颜色（“按图生成地形”前调用，保证采样是最新的）。 */
     public void resampleOverlayColors() {
         sampleColorsFromOverlay();
+    }
+
+    /** 切换模组素材后清掉图片/贴图缓存，下一次绘制重新按新素材加载。 */
+    public void clearCachesForModChange() {
+        flagBmps = null; legionBmps = null; buildingBmps = null;
+        legionBmpsR.clear(); generalBmps.clear();
+        terrainBmps = null;
+        landBmp = null; seaBmp = null; trapLandBmp = null; trapSeaBmp = null;
+        facAirport = null; facDepot = null; facFactory = null; facLab = null;
+        facLaunch = null; facNuclear = null;
+        antiair1 = null; antiair2 = null; antiair3 = null; radarIcon = null; formationIcon = null;
+        java.util.Arrays.fill(levelIcons, null);
+        imagesLoaded = false;                 // 下次绘制时 ensureImages() 会按新素材重新加载
+        hexTileCache.clear(); cachedHexSize = -1f;
+        fullMapDirty = true; fullMapCache = null;
     }
 
     private float hs() { return 20f * scale; }

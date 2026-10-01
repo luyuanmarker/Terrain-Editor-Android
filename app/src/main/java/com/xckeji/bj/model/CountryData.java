@@ -27,6 +27,25 @@ public class CountryData {
         return n != null ? n : ("国家" + countryId);
     }
 
+    /**
+     * 用模组里的 CountrySettings.json 覆盖/扩充国家名（[{Id,Name,...}]）。
+     * 内置 assets 里没有这个文件，没导入模组时不会调用。
+     */
+    public static void load(byte[] jsonBytes) {
+        if (jsonBytes == null || jsonBytes.length == 0) return;
+        try {
+            org.json.JSONArray arr = new org.json.JSONArray(new String(jsonBytes, "UTF-8"));
+            for (int i = 0; i < arr.length(); i++) {
+                org.json.JSONObject o = arr.optJSONObject(i);
+                if (o == null) continue;
+                int id = o.optInt("Id", 0);
+                String nm = o.optString("Name", "");
+                if (id > 0 && !nm.trim().isEmpty()) NAMES.put(id, nm.trim());
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
     /** 添加自定义国家（供“添加国家”功能使用，可覆盖/新增 ID）。 */
     public static void addCountry(int countryId, String name) {
         if (countryId > 0 && name != null && !name.trim().isEmpty()) {
