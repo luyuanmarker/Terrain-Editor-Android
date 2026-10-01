@@ -74,6 +74,9 @@ public class ModImporter {
     private static final String[] ATLASES = {
             "image_flags_hd", "image_legion_icon_hd", "buildings_hd", "terrain_hd",
             "image_facilities_hd", "image_cityfeature_hd", "image_units_hd",
+            // 战棋/战术图集：兵种上真正用的国旗(flag_N)和将领头像(head_名字)都在这里，
+            // 放最后导入，让它的 flag_/head_ 覆盖前面图集里的同名素材
+            "tacticalmap",
     };
     /** 内置素材目录优先级：切出来的图按名字落到这里面对应的目录。 */
     private static final String[] BUILTIN_DIRS = {"flag", "legion", "building", "map", "image/status", "general", "btl", "pixmap"};
@@ -264,6 +267,13 @@ public class ModImporter {
                     || x + w > atlasBmp.getWidth() || y + h > atlasBmp.getHeight()) continue;
             String target = builtinIndex.get(name.toLowerCase());
             if (target == null) target = builtinIndex.get(stripExt(name).toLowerCase());
+            // tacticalmap 里的将领头像叫 head_<名字>.png，落到内置的 general/<名字>.webp
+            if (target == null && n0(name).startsWith("head_")) {
+                String base = stripExt(name.substring("head_".length()));
+                target = builtinIndex.get((base + ".webp").toLowerCase());
+                if (target == null) target = builtinIndex.get((base + ".png").toLowerCase());
+                if (target == null) target = "general/" + base + ".png";   // 模组特有将领
+            }
             if (target == null) {
                 String fb = fallbackDirFor(name, fallbackDir);
                 if (fb == null) { r.skipped++; continue; }
@@ -279,6 +289,8 @@ public class ModImporter {
         }
         return cut;
     }
+
+    private static String n0(String s) { return s == null ? "" : s.toLowerCase(); }
 
     /** 内置里没有同名文件时，按名字前缀决定放到哪个目录（模组特有素材靠这个）。 */
     private static String fallbackDirFor(String name, String atlasFallback) {
