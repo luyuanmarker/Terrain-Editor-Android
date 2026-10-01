@@ -6,6 +6,8 @@ import java.util.Map;
 /** 国家 ID -> 名称（军团段 0x4 的国家代码）。 */
 public class CountryData {
     private static final Map<Integer, String> NAMES = new HashMap<>();
+    /** 国家 → 国旗编号（CountrySettings.json 的 Logo 字段；0 = 这个国家没有国旗）。 */
+    private static final Map<Integer, Integer> LOGOS = new HashMap<>();
 
     static {
         NAMES.put(1, "英国"); NAMES.put(2, "法国"); NAMES.put(3, "德国"); NAMES.put(4, "西德");
@@ -41,9 +43,20 @@ public class CountryData {
                 int id = o.optInt("Id", 0);
                 String nm = o.optString("Name", "");
                 if (id > 0 && !nm.trim().isEmpty()) NAMES.put(id, nm.trim());
+                if (id > 0) LOGOS.put(id, o.optInt("Logo", id));
             }
         } catch (Exception ignored) {
         }
+    }
+
+    /**
+     * 该国家在游戏里用的国旗编号：优先 CountrySettings.json 的 Logo 字段
+     * （模组里很多国家的 Logo ≠ Id，比如「陕北神秘势力」用民国旗、挪威 Logo=0 没有旗）。
+     * 没有配置（内置素材）时按国家 ID 当旗号，行为与以前一致。
+     */
+    public static int logo(int countryId) {
+        Integer l = LOGOS.get(countryId);
+        return l == null ? countryId : l;
     }
 
     /** 添加自定义国家（供“添加国家”功能使用，可覆盖/新增 ID）。 */

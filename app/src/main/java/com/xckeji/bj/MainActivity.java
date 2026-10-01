@@ -2639,7 +2639,10 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
     private void ensureFlagIcons() {
         if (flagIcons != null) return;
         flagIcons = new java.util.HashMap<>();
-        for (int id = 1; id <= 48; id++) {
+        // 按实际存在的编号加载（模组的国旗可能到 95 号）
+        java.util.TreeSet<Integer> ids = com.xckeji.bj.mod.ModAssets.idsIn(this, "flag", "flag_");
+        if (ids.isEmpty()) for (int i = 1; i <= 48; i++) ids.add(i);
+        for (int id : ids) {
             Bitmap b = loadBmp("flag/flag_" + id + ".png");
             if (b != null) flagIcons.put(id, b);
         }
@@ -3626,6 +3629,11 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         bar.setPadding(8, 0, 8, 0);
         bar.setGravity(Gravity.CENTER_VERTICAL);
 
+        // 「主页」按钮放最左边：随时一键回首页（和刚打开 App 一样）
+        Button homeBtn = makeTopBtn("主页");
+        homeBtn.setOnClickListener(v -> backToHome());
+        bar.addView(homeBtn); bar.addView(spacer(4));
+
         // 撤销按钮；音乐/音效与打开/保存已移到左侧浮动按钮
         undoBtn = makeTopBtn("撤销");
         undoBtn.setOnClickListener(v -> {
@@ -3654,7 +3662,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         bar.addView(redoBtn); bar.addView(spacer(4));
 
         // 工具栏可横向滑动，手机窄屏时所有操作均可访问。
-        String[] labels = {"新建BTL","编辑器","地图","视图","主页"};
+        String[] labels = {"新建BTL","编辑器","地图","视图"};
         for (int i = 0; i < labels.length; i++) {
             final int a = i;
             Button btn = makeTopBtn(labels[i]);
@@ -3663,7 +3671,6 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
                 if (a == 1) showEditorMenu(btn);
                 else if (a == 2) showMapPopup(btn);
                 else if (a == 3) showViewPopup(btn);
-                else if (a == 4) backToHome();          // 回主页，和刚打开 App 时的首页一致
                 else topAction(a);
             });
             bar.addView(btn);
@@ -3960,7 +3967,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
                 legionOverlay.setVisibility(View.GONE);
                 showLegionDetailOverlay(lg);
             });
-            Bitmap flag = flagIcons != null ? flagIcons.get(lg.country) : null;
+            Bitmap flag = flagIcons != null ? flagIcons.get(CountryData.logo(lg.country)) : null;
             if (flag != null) {
                 ImageView flagIv = new ImageView(this);
                 flagIv.setImageBitmap(flag);
@@ -4972,7 +4979,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
             row.setPadding((int) (4 * dp), (int) (6 * dp), (int) (4 * dp), (int) (6 * dp));
             row.setClickable(true);
             row.setOnClickListener(v -> showLegionDetailOverlay(lg));
-            Bitmap flag = flagIcons != null ? flagIcons.get(lg.country) : null;
+            Bitmap flag = flagIcons != null ? flagIcons.get(CountryData.logo(lg.country)) : null;
             if (flag != null) {
                 ImageView iv = new ImageView(this);
                 iv.setImageBitmap(flag);
@@ -6829,7 +6836,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
             for (int li = 0; li < mapData.legions.size(); li++) {
                 final int legion = li;
                 final MapData.Legion lg = mapData.legions.get(li);
-                Bitmap flag = flagIcons != null ? flagIcons.get(lg.country) : null;
+                Bitmap flag = flagIcons != null ? flagIcons.get(CountryData.logo(lg.country)) : null;
                 addCountryCell(ownRow, legion, flag, CountryData.name(lg.country), curLeg, () -> {
                     mapData.ensureProvincesSize();
                     mapData.belongs[cityIdx] = (byte) legion;

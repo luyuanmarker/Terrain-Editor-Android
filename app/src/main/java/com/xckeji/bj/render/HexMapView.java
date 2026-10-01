@@ -585,12 +585,26 @@ public class HexMapView extends View {
         drawGuideImage(canvas);
     }
 
+    /** 取国旗位图：缓存里没有就按编号现场加载一次（模组后加的国旗也能显示）。 */
+    private Bitmap flagFor(int country) {
+        if (country <= 0) return null;
+        // 游戏里国旗编号取 CountrySettings.json 的 Logo 字段（≠ 国家ID 很常见，Logo=0 表示没旗）
+        int logo = com.xckeji.bj.model.CountryData.logo(country);
+        if (logo <= 0) return null;
+        Bitmap b = flagBmps == null ? null : flagBmps.get(logo);
+        if (b == null) {
+            b = load("flag/flag_" + logo + ".png");
+            if (b != null && flagBmps != null) flagBmps.put(logo, b);
+        }
+        return b;
+    }
+
     /** 在 (px,py) 居中绘制小国旗（归属 -> 国家 -> flag_N.png），中立不画。 */
     private void drawCountryFlag(Canvas canvas, float px, float py, float size, int legion) {
         if (legion == 0xFF || legion == 0xFFFF || legion < 0
                 || mapData.legionCountries == null
                 || legion >= mapData.legionCountries.length || flagBmps == null) return;
-        Bitmap flag = flagBmps.get(mapData.legionCountries[legion]);
+        Bitmap flag = flagFor(mapData.legionCountries[legion]);
         if (flag == null) return;
         float fw = size;
         float fh = fw * flag.getHeight() / (float) flag.getWidth();
@@ -604,7 +618,7 @@ public class HexMapView extends View {
         float fw = 0f, fh = 0f;
         if (legion != 0xFF && legion >= 0 && mapData.legionCountries != null
                 && legion < mapData.legionCountries.length && flagBmps != null) {
-            Bitmap flag = flagBmps.get(mapData.legionCountries[legion]);
+            Bitmap flag = flagFor(mapData.legionCountries[legion]);
             if (flag != null) {
                 fw = iconSize * 0.55f;
                 fh = fw * flag.getHeight() / (float) flag.getWidth();
