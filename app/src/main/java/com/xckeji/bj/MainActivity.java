@@ -4408,7 +4408,10 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding((int) (12 * dp), (int) (10 * dp), (int) (12 * dp), (int) (10 * dp));
-        modContentHost.addView(root, new LinearLayout.LayoutParams(-1, -1));
+        // 整页可上下滚动：按钮多了也不会被挤出屏幕（之前"找不到 btl 界面"就是这个原因）
+        ScrollView modSv = new ScrollView(this);
+        modSv.addView(root);
+        modContentHost.addView(modSv, new LinearLayout.LayoutParams(-1, -1));
 
         // 顶栏
         LinearLayout bar = new LinearLayout(this);
@@ -4437,6 +4440,25 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         curTv.setTextColor(cur == null ? 0xFF6b7280 : 0xFF166534);
         curTv.setPadding(0, (int) (8 * dp), 0, (int) (6 * dp));
         root.addView(curTv);
+
+        // 第一眼就能看到的「浏览模组地图」入口（打开模组里的 btl）
+        if (cur != null) {
+            int n = com.xckeji.bj.mod.ModMaps.list(this, cur).size();
+            lightBtn(root, "📁 浏览模组地图（" + n + " 个 btl）→", 0xFF1e5fa8, dp, () -> {
+                modMapQuery = "";
+                modMapKind = "全部";
+                showModMapPage(cur);
+            });
+            if (n == 0) {
+                TextView tip = new TextView(this);
+                tip.setText("读不到 btl 列表：如果你是「导入模组 apk」进来的，就只能换素材；"
+                        + "要能打开/保存模组里的 btl，请用「导入模组（文件夹）」重新导入一次（选光宇3.0_1.17.2 文件夹）。");
+                tip.setTextSize(11);
+                tip.setTextColor(0xFFb45309);
+                tip.setPadding(0, (int) (4 * dp), 0, 0);
+                root.addView(tip);
+            }
+        }
 
         // 诊断信息：一眼看出素材到底导进来了没有、当前地图用到的国家有没有旗
         TextView diag = new TextView(this);
@@ -4576,15 +4598,6 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         }
         root.addView(listBox);
 
-        // 模组地图：单独开一页（btl 太多，混在这页里不好点）
-        if (cur != null) {
-            int n = com.xckeji.bj.mod.ModMaps.list(this, cur).size();
-            lightBtn(root, "浏览模组地图（" + n + " 个 btl）→", 0xFF1e5fa8, dp, () -> {
-                modMapQuery = "";
-                modMapKind = "全部";
-                showModMapPage(cur);
-            });
-        }
     }
 
     /** 「模组地图」单独整屏页：搜索 + 分区 + 大行高列表，点一行打开该 btl。 */
