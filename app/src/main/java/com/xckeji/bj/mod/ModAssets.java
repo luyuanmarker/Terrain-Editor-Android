@@ -209,4 +209,33 @@ public class ModAssets {
     public static void close(Closeable c) {
         if (c != null) try { c.close(); } catch (IOException ignored) { }
     }
+
+    /**
+     * 自检：模组目录、各类素材文件数、以及抽几个国旗真的解码试试。
+     * 启动时写进 logcat（tag=MOD），模组页也会显示——排查"国旗不显示"用。
+     */
+    public static String selfCheck(Context ctx) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("模组=").append(current == null ? "(内置)" : current);
+        sb.append(" 目录=").append(currentDir == null ? "-" : currentDir.getAbsolutePath());
+        if (currentDir == null) return sb.toString();
+        File flagDir = new File(currentDir, "flag");
+        File[] fs = flagDir.listFiles();
+        sb.append(" 国旗文件=").append(fs == null ? -1 : fs.length);
+        if (fs != null && fs.length > 0) {
+            int tested = 0;
+            for (File f : fs) {
+                Bitmap b = decode(ctx, "flag/" + f.getName());
+                sb.append(" | ").append(f.getName()).append("=")
+                        .append(b == null ? "解码失败" : b.getWidth() + "x" + b.getHeight());
+                if (++tested >= 3) break;
+            }
+        }
+        // 再试几个固定编号（便于看是不是编号断档）
+        for (int id : new int[]{1, 5, 66}) {
+            File f = new File(flagDir, "flag_" + id + ".png");
+            sb.append(" | flag_").append(id).append(f.isFile() ? "存在" : "缺失");
+        }
+        return sb.toString();
+    }
 }

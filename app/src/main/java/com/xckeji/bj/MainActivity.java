@@ -2064,6 +2064,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
     private void initEditorAfterLaunch() {
         // 先确定当前使用的模组（有的话），后面的素材/json 都会优先走模组
         com.xckeji.bj.mod.ModAssets.init(this);
+        android.util.Log.i("MOD", "启动自检: " + com.xckeji.bj.mod.ModAssets.selfCheck(this));
         loadThumbs();
         // 兵种数据必须在 buildUI() 之前加载，右侧面板的兵种图标栏才会显示图标
         try {
@@ -4468,6 +4469,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         } else {
             java.io.File md = new java.io.File(com.xckeji.bj.mod.ModAssets.modsBase(this), cur);
             db.append(com.xckeji.bj.mod.ModImporter.countText(md));
+            db.append("\n").append(com.xckeji.bj.mod.ModAssets.selfCheck(this));
             db.append("\n素材目录：").append(md.getAbsolutePath());
             if (hexMapView != null) db.append("\n编辑器已加载国旗：").append(hexMapView.loadedFlagCount()).append(" 面");
             if (mapData != null && mapData.legionCountries != null && mapData.legionCountries.length > 0) {
