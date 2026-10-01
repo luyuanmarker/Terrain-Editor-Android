@@ -197,8 +197,9 @@ public class ModImporter {
         Matcher m = Pattern.compile(
                 "<Image\\s+name=\"([^\"]+)\"\\s+x=\"(\\d+)\"\\s+y=\"(\\d+)\"\\s+w=\"(\\d+)\"\\s+h=\"(\\d+)\"")
                 .matcher(xml);
-        // 有些模组图集（例如光宇3.0 的 image_flags_hd）实际位图比 xml 布局大（@2x 之类），
-        // 这里按「xml 推断尺寸 vs 实际位图尺寸」自动求缩放系数再裁，避免裁错整张图。
+        // 缩放判定：不能直接拿位图尺寸比（很多图集右侧/底部是留白的，例如光宇3.0 的
+        // image_flags_hd.webp 是 744×692，但真正有画的区域只有 572×536，跟 xml 布局一致）。
+        // 所以先量出「有内容的最大范围」，只有它确实不等于 xml 布局时才按比例缩放裁图。
         float scale = 1f;
         {
             int maxX = 0, maxY = 0;
@@ -208,10 +209,26 @@ public class ModImporter {
                 maxX = Math.max(maxX, Integer.parseInt(mm.group(1)) + Integer.parseInt(mm.group(3)));
                 maxY = Math.max(maxY, Integer.parseInt(mm.group(2)) + Integer.parseInt(mm.group(4)));
             }
-            if (maxX > 0 && maxY > 0) {
-                float sx = atlasBmp.getWidth() / (float) maxX;
-                float sy = atlasBmp.getHeight() / (float) maxY;
-                if (Math.abs(sx - sy) / Math.max(sx, sy) < 0.05f && (sx > 1.02f || sx < 0.98f)) {
+            if (maxX > 0 && maxY > 0 && atlasBmp.hasAlpha()) {
+                int contentW = atlasBmp.getWidth(), contentH = atlasBmp.getHeight();
+                // 从右/下往回找第一列(行)有非透明像素的位置
+                outer:
+                for (int x = atlasBmp.getWidth() - 1; x >= 0; x--) {
+                    for (int y = atlasBmp.getHeight() - 1; y >= 0; y -= 2) {
+                        if ((atlasBmp.getPixel(x, y) >>> 24) != 0) { contentW = x + 1; break outer; }
+                    }
+                }
+                outer2:
+                for (int y = atlasBmp.getHeight() - 1; y >= 0; y--) {
+                    for (int x = atlasBmp.getWidth() - 1; x >= 0; x -= 2) {
+                        if ((atlasBmp.getPixel(x, y) >>> 24) != 0) { contentH = y + 1; break outer2; }
+                    }
+                }
+                float sx = contentW / (float) maxX;
+                float sy = contentH / (float) maxY;
+                // 只在“内容范围明显不等于 xml 布局”时才缩放（真正的 2 倍/更高密度图集），
+                // 差异小的（留白、1~2 像素误差）一律按 1:1 裁，避免误伤
+                if (Math.abs(sx - sy) / Math.max(sx, sy) < 0.05f && (sx > 1.35f || sx < 0.65f)) {
                     scale = (sx + sy) / 2f;
                 }
             }

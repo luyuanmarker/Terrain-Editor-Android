@@ -3962,7 +3962,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
                 legionOverlay.setVisibility(View.GONE);
                 showLegionDetailOverlay(lg);
             });
-            Bitmap flag = flagIcons != null ? flagIcons.get(CountryData.logo(lg.country)) : null;
+            Bitmap flag = flagIcons != null ? flagIcons.get(lg.country) : null;
             if (flag != null) {
                 ImageView flagIv = new ImageView(this);
                 flagIv.setImageBitmap(flag);
@@ -4974,7 +4974,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
             row.setPadding((int) (4 * dp), (int) (6 * dp), (int) (4 * dp), (int) (6 * dp));
             row.setClickable(true);
             row.setOnClickListener(v -> showLegionDetailOverlay(lg));
-            Bitmap flag = flagIcons != null ? flagIcons.get(CountryData.logo(lg.country)) : null;
+            Bitmap flag = flagIcons != null ? flagIcons.get(lg.country) : null;
             if (flag != null) {
                 ImageView iv = new ImageView(this);
                 iv.setImageBitmap(flag);
@@ -6831,7 +6831,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
             for (int li = 0; li < mapData.legions.size(); li++) {
                 final int legion = li;
                 final MapData.Legion lg = mapData.legions.get(li);
-                Bitmap flag = flagIcons != null ? flagIcons.get(CountryData.logo(lg.country)) : null;
+                Bitmap flag = flagIcons != null ? flagIcons.get(lg.country) : null;
                 addCountryCell(ownRow, legion, flag, CountryData.name(lg.country), curLeg, () -> {
                     mapData.ensureProvincesSize();
                     mapData.belongs[cityIdx] = (byte) legion;

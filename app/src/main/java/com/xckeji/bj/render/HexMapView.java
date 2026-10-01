@@ -585,16 +585,20 @@ public class HexMapView extends View {
         drawGuideImage(canvas);
     }
 
-    /** 取国旗位图：缓存里没有就按编号现场加载一次（模组后加的国旗也能显示）。 */
+    /**
+     * 取国旗位图：优先按国家 ID 找 flag_&lt;ID&gt;.png（模组的国旗编号就是国家ID），
+     * 找不到再退到 CountrySettings.json 的 Logo 编号，仍然没有就不画。
+     */
     private Bitmap flagFor(int country) {
         if (country <= 0) return null;
-        // 游戏里国旗编号取 CountrySettings.json 的 Logo 字段（≠ 国家ID 很常见，Logo=0 表示没旗）
-        int logo = com.xckeji.bj.model.CountryData.logo(country);
-        if (logo <= 0) return null;
-        Bitmap b = flagBmps == null ? null : flagBmps.get(logo);
+        Bitmap b = flagBmps == null ? null : flagBmps.get(country);
         if (b == null) {
-            b = load("flag/flag_" + logo + ".png");
-            if (b != null && flagBmps != null) flagBmps.put(logo, b);
+            b = load("flag/flag_" + country + ".png");
+            if (b == null) {
+                int logo = com.xckeji.bj.model.CountryData.logo(country);
+                if (logo > 0 && logo != country) b = load("flag/flag_" + logo + ".png");
+            }
+            if (b != null && flagBmps != null) flagBmps.put(country, b);
         }
         return b;
     }
