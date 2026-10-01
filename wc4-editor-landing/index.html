@@ -3,198 +3,357 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>WC4 地形编辑器（安卓）</title>
-<meta name="description" content="手机上的世界征服者4地图编辑器：改地形、加兵种、画省区、设国家，战役征服世界图都能改。">
+<title>WC4 地形编辑器 · 手机上的世界征服者4地图编辑器</title>
+<meta name="description" content="不用电脑，在手机上直接改《世界征服者4》的战役、征服和世界地图：涂地形、放城市、编兵种军团、划省区、写事件，还能导入模组素材。免费下载。">
+<meta name="keywords" content="世界征服者4,WC4,地形编辑器,地图编辑器,BTL,模组,安卓">
+<meta property="og:title" content="WC4 地形编辑器 · 手机上的世界征服者4地图编辑器">
+<meta property="og:description" content="涂地形、放城市、编兵种军团、划省区、写事件，支持导入模组素材，改完直接放回游戏。">
+<meta property="og:type" content="website">
 <style>
 :root{
-  --bg:#0d0f1c; --card:#181c31; --line:#2a3050; --txt:#e8ebf7; --mut:#9aa2c2;
-  --acc:#8f6bff; --acc2:#4db8ff;
+  --bg:#0c0f1c; --bg2:#121732; --card:#171c33; --line:#2b3252;
+  --txt:#e9ecf8; --mut:#9aa3c4; --dim:#6d7594;
+  --acc:#8f6bff; --acc2:#4db8ff; --ok:#22c55e; --warn:#f59e0b;
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html{scroll-behavior:smooth}
 body{
   font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
-  background:var(--bg); color:var(--txt); line-height:1.75;
+  background:radial-gradient(1200px 600px at 50% -10%,#1b2350 0,var(--bg) 60%); color:var(--txt); line-height:1.75;
+  -webkit-font-smoothing:antialiased;
 }
-.wrap{max-width:820px;margin:0 auto;padding:0 22px}
-a{color:var(--acc2)}
+a{color:var(--acc2);text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:1000px;margin:0 auto;padding:0 20px}
 
-header{border-bottom:1px solid var(--line)}
-.nav{display:flex;align-items:center;justify-content:space-between;height:58px}
-.logo{font-weight:800;font-size:17px}
-.nav a{color:var(--mut);font-size:14px;margin-left:20px}
-.nav a:hover{color:var(--txt)}
+/* 顶栏 */
+header{position:sticky;top:0;z-index:20;backdrop-filter:blur(10px);
+  background:rgba(12,15,28,.75);border-bottom:1px solid var(--line)}
+.nav{display:flex;align-items:center;justify-content:space-between;height:60px;gap:10px}
+.logo{display:flex;align-items:center;gap:10px;font-weight:900;font-size:17px;white-space:nowrap}
+.logo i{width:26px;height:26px;border-radius:8px;display:inline-block;
+  background:linear-gradient(135deg,var(--acc),var(--acc2));box-shadow:0 0 18px rgba(143,107,255,.5)}
+.nav nav{display:flex;gap:18px;overflow-x:auto}
+.nav nav a{color:var(--mut);font-size:14px;white-space:nowrap}
+.nav nav a:hover{color:var(--txt);text-decoration:none}
 
-.btn{display:inline-block;border-radius:999px;padding:10px 24px;font-weight:700;font-size:15px;border:none;cursor:pointer;transition:.15s}
-.btn-p{background:linear-gradient(90deg,var(--acc),var(--acc2));color:#0d0f1c}
+.btn{display:inline-flex;align-items:center;gap:8px;border-radius:999px;padding:12px 26px;
+  font-weight:800;font-size:15px;border:0;cursor:pointer;transition:.18s;white-space:nowrap}
+.btn-p{background:linear-gradient(90deg,var(--acc),var(--acc2));color:#0c0f1c}
+.btn-p:hover{filter:brightness(1.08);transform:translateY(-1px);text-decoration:none}
 .btn-o{background:transparent;color:var(--txt);border:1px solid var(--line)}
-.btn-o:hover{border-color:var(--acc2)}
+.btn-o:hover{border-color:var(--acc2);text-decoration:none}
 
-.hero{text-align:center;padding:72px 20px 46px}
-.hero h1{font-size:clamp(28px,5vw,44px);font-weight:900;line-height:1.25}
-.hero h1 b{background:linear-gradient(90deg,var(--acc),var(--acc2));-webkit-background-clip:text;background-clip:text;color:transparent}
-.hero p{color:var(--mut);font-size:16px;max-width:600px;margin:16px auto 28px}
+/* 首屏 */
+.hero{text-align:center;padding:78px 0 40px}
+.badge{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--mut);
+  border:1px solid var(--line);border-radius:999px;padding:5px 14px;margin-bottom:20px}
+.badge b{color:var(--ok)}
+.hero h1{font-size:clamp(30px,5.4vw,50px);font-weight:900;line-height:1.2;letter-spacing:-.5px}
+.hero h1 b{background:linear-gradient(90deg,var(--acc),var(--acc2));
+  -webkit-background-clip:text;background-clip:text;color:transparent}
+.hero p.lead{color:var(--mut);font-size:17px;max-width:680px;margin:18px auto 30px}
 .hero .btns{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
-.hero .small{margin-top:14px;font-size:13px;color:#6d7594}
+.hero .small{margin-top:14px;font-size:13px;color:var(--dim)}
+.stats{display:flex;gap:14px;justify-content:center;flex-wrap:wrap;margin-top:34px}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 20px;min-width:130px}
+.stat b{display:block;font-size:22px;font-weight:900;
+  background:linear-gradient(90deg,var(--acc),var(--acc2));-webkit-background-clip:text;background-clip:text;color:transparent}
+.stat span{font-size:12.5px;color:var(--mut)}
 
-section{padding:44px 0}
-.sec-h{margin-bottom:24px}
-.sec-h h2{font-size:22px;font-weight:800}
+section{padding:52px 0}
+section h2{font-size:clamp(22px,3.4vw,30px);font-weight:900;margin-bottom:8px}
+section h2 em{font-style:normal;color:var(--acc2)}
+section .sub{color:var(--mut);margin-bottom:26px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:20px;transition:.18s}
+.card:hover{border-color:#3a4370;transform:translateY(-2px)}
+.card h3{font-size:16px;font-weight:800;margin-bottom:8px;display:flex;align-items:center;gap:8px}
+.card h3 i{font-style:normal;font-size:18px}
+.card p{color:var(--mut);font-size:14px}
+.card ul{color:var(--mut);font-size:14px;padding-left:18px;margin-top:6px}
+.card li{margin:2px 0}
 
-.note{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px 22px;font-size:14.5px;color:var(--mut)}
-.note b{color:var(--txt)}
+.split{display:grid;grid-template-columns:1.05fr .95fr;gap:22px;align-items:center}
+@media(max-width:820px){.split{grid-template-columns:1fr}}
+.panel{background:linear-gradient(160deg,#151a33,#10142a);border:1px solid var(--line);
+  border-radius:18px;padding:22px}
+.panel h3{font-size:17px;margin-bottom:10px}
+.steps{counter-reset:s;list-style:none}
+.steps li{position:relative;padding-left:38px;margin:12px 0;color:var(--mut);font-size:14.5px}
+.steps li:before{counter-increment:s;content:counter(s);position:absolute;left:0;top:0;
+  width:26px;height:26px;border-radius:50%;background:linear-gradient(135deg,var(--acc),var(--acc2));
+  color:#0c0f1c;font-weight:900;font-size:13px;display:flex;align-items:center;justify-content:center}
 
-.list{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}
-.item{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 18px}
-.item h3{font-size:15.5px;margin-bottom:4px}
-.item p{font-size:13.5px;color:var(--mut)}
+/* 截图 */
+.shots{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px}
+.shot{background:#0f1428;border:1px dashed #38406a;border-radius:14px;min-height:170px;
+  display:flex;align-items:center;justify-content:center;color:var(--dim);font-size:13px;text-align:center;padding:16px}
+.shot img{width:100%;border-radius:10px;display:block}
 
-.steps{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}
-.step{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 18px}
-.step b{display:block;font-size:15px;margin-bottom:3px}
-.step p{font-size:13.5px;color:var(--mut)}
+/* 下载 & 捐赠 */
+.dl{background:linear-gradient(150deg,#1a1f3d,#121733);border:1px solid #333c66;border-radius:20px;padding:26px}
+.dl .row{display:flex;gap:14px;align-items:center;flex-wrap:wrap;justify-content:space-between}
+.ver{font-size:13px;color:var(--mut)}
+.ver b{color:var(--txt)}
+.notes{margin-top:16px;background:#0e1226;border:1px solid var(--line);border-radius:12px;padding:14px 16px;
+  font-size:13.5px;color:var(--mut);white-space:pre-wrap}
+.note-list{margin-top:14px;font-size:13px;color:var(--dim)}
+.note-list li{margin:4px 0;margin-left:18px}
+.donate{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:16px}
+.qr{background:#fff;border-radius:14px;padding:12px;text-align:center}
+.qr img{width:100%;max-width:230px;border-radius:8px;display:block;margin:0 auto}
+.qr .cap{color:#333;font-size:13px;font-weight:700;margin-top:8px}
+.qr .ph{color:#666;font-size:12.5px;padding:44px 10px}
+.tip{background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.35);color:#f6c76b;
+  border-radius:12px;padding:12px 14px;font-size:13px;margin-top:16px}
 
-.dl{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:44px 26px;text-align:center}
-.dl h2{font-size:24px;font-weight:800;margin-bottom:10px}
-.dl p{color:var(--mut);font-size:14.5px;margin-bottom:22px}
-.group{display:inline-flex;align-items:center;gap:10px;background:#0d0f1c;border:1px dashed var(--acc);border-radius:12px;padding:12px 20px;font-size:20px;font-weight:800;margin-bottom:16px;cursor:pointer}
-.dl .tips{font-size:12.5px;color:#6d7594;margin-top:20px}
-
-details{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 18px;margin-bottom:10px}
-summary{cursor:pointer;font-weight:700;font-size:14.5px}
-details p{margin-top:8px;font-size:13.5px;color:var(--mut)}
-
-footer{border-top:1px solid var(--line);padding:26px 0 36px;text-align:center;color:#6d7594;font-size:13px}
-footer b{color:var(--txt)}
-
-@media(max-width:620px){
-  .list,.steps{grid-template-columns:1fr}
-}
+footer{border-top:1px solid var(--line);padding:30px 0 44px;color:var(--dim);font-size:13px;text-align:center}
+.kbd{display:inline-block;background:#0f1428;border:1px solid var(--line);border-radius:6px;
+  padding:1px 7px;font-size:12.5px;color:var(--txt)}
 </style>
 </head>
 <body>
 
 <header>
   <div class="wrap nav">
-    <div class="logo">WC4 地形编辑器</div>
+    <div class="logo"><i></i>WC4 地形编辑器</div>
     <nav>
       <a href="#features">功能</a>
-      <a href="#how">怎么用</a>
+      <a href="#mod">模组</a>
+      <a href="#shots">界面</a>
       <a href="#download">下载</a>
+      <a href="#donate">捐赠</a>
+      <a href="#group">交流群</a>
     </nav>
   </div>
 </header>
 
-<div class="hero">
-  <div class="wrap">
-    <h1>我做了个手机上的<br>世界征服者4 <b>地图编辑器</b></h1>
-    <p>不用电脑，不用装别的工具，直接在手机上改战役、征服和世界地图。改完保存，放进游戏就能用。</p>
-    <div class="btns">
-      <a class="btn btn-p" href="#download">下载安装包</a>
-      <a class="btn btn-o" href="#features">先看功能</a>
-    </div>
-    <p class="small">安卓 · v1.5 内测版 · 自己做的，持续更新</p>
+<div class="wrap hero">
+  <div class="badge">安卓手机 · 免费 · <b>已支持模组素材</b></div>
+  <h1>在手机上改《世界征服者4》<br><b>任何一张地图</b></h1>
+  <p class="lead">
+    不用电脑、不用装别的工具。打开游戏里的 <span class="kbd">.btl</span> 战役、征服和 <span class="kbd">world.bin</span> 世界地图，
+    涂地形、放城市、编兵种与军团、划省区、写事件，改完直接放回游戏就能玩。
+  </p>
+  <div class="btns">
+    <a class="btn btn-p" id="dlTop" href="#download">⬇ 立即下载</a>
+    <a class="btn btn-o" href="#features">看看能做什么</a>
+  </div>
+  <div class="small">最新版 <b id="verTop">v2.1</b> · 约 14 MB · 支持 Android 8.0 及以上</div>
+
+  <div class="stats">
+    <div class="stat"><b>1083</b><span>模组 btl 直接浏览编辑</span></div>
+    <div class="stat"><b>31</b><span>种地形 + 官方海岸线</span></div>
+    <div class="stat"><b>模组素材</b><span>国旗/兵种/建筑/贴图替换</span></div>
+    <div class="stat"><b>免费</b><span>无广告无内购</span></div>
   </div>
 </div>
 
-<section>
-  <div class="wrap note">
-    这编辑器是按游戏实际的 BTL 二进制格式做的，不是套壳改内存。你能看到的数据，基本就是文件里真正的数据：
-    兵种 48 字节一条、军团 300 字节一条、建筑 32 字节一条，字段都是对着格式一个个对出来的。
-    所以改完保存，游戏里是什么样就是什么样，不会"看着改了结果没用"。
+<section id="about">
+  <div class="wrap">
+    <h2>它是什么</h2>
+    <p class="sub">一个专门给《世界征服者4》做地图/关卡的工具，跑在安卓手机上。</p>
+    <div class="grid">
+      <div class="card"><h3><i>📱</i>手机上就能用</h3>
+        <p>躺床上改地图：拖动缩放界面、手指涂地形、点一下放兵种，不用开电脑、不用装 Java 环境。</p></div>
+      <div class="card"><h3><i>🧩</i>按游戏规则改</h3>
+        <p>官方 MapEdit 的段结构、海岸线算法、省区规则、海洋区划 65535 这些"硬要求"都按官方来，改完进游戏不崩。</p></div>
+      <div class="card"><h3><i>🎨</i>支持你自己的模组</h3>
+        <p>导入解包后的模组文件夹（或 apk），国旗、兵种图标、建筑、地形贴图、将领头像、国家/兵种数值全换成模组那套，还能直接浏览模组里上千个 btl。</p></div>
+    </div>
   </div>
 </section>
 
 <section id="features">
   <div class="wrap">
-    <div class="sec-h"><h2>目前能做的</h2></div>
-    <div class="list">
-      <div class="item"><h3>地形</h3><p>笔刷涂地形、随机地形、扩展地图（上下左右）、框选截取，陆地海洋随便画。</p></div>
-      <div class="item"><h3>城市</h3><p>加城市、改建筑全部字段、给城市设国家归属（直接选国旗），新放的城市也能编辑。</p></div>
-      <div class="item"><h3>兵种</h3><p>图标选兵种、改 48 字节全字段、编制用下拉框、随机兵力、批量放置。</p></div>
-      <div class="item"><h3>省区规划</h3><p>取省/刷省笔刷，按住拖动连续划省，省区颜色叠在地形上，带编号，画错能撤销。</p></div>
-      <div class="item"><h3>国家 / 军团</h3><p>军团列表、国家颜色、新建国家、改军团 300 字节数据。</p></div>
-      <div class="item"><h3>BTL 主数据</h3><p>版本、地图序号、胜利条件、战役时代、事件编辑。打开 APK 也能直接读里面的地图文件。</p></div>
+    <h2>功能亮点</h2>
+    <p class="sub">从地形到内容，从单格到整图，一整套都在里面。</p>
+    <div class="grid">
+      <div class="card"><h3><i>🗺️</i>地形</h3>
+        <ul>
+          <li>31 种地形笔刷，笔刷范围 0~5 圈</li>
+          <li>官方海岸线算法自动补波浪</li>
+          <li>随机地形（按概率、可选地形组）</li>
+          <li><b>导入照片一键生成地形</b>：蓝色=海洋，其余=陆地</li>
+        </ul></div>
+      <div class="card"><h3><i>🏙️</i>城市与建筑</h3>
+        <ul>
+          <li>小城~大都市、机场、军港、要塞、工厂、核电站…</li>
+          <li>32 字节全字段可改，新放的城市可当新省区</li>
+          <li>国家归属带国旗选择，建筑上显示设施图标</li>
+        </ul></div>
+      <div class="card"><h3><i>🎖️</i>兵种与军团</h3>
+        <ul>
+          <li>点图标 → 点地图，连点批量放兵（船/陆军自动分水陆）</li>
+          <li>等级、编制 1~4、方向、将领、技能、勋章</li>
+          <li>军团列表 + 国家配置表（75 列），改国家颜色</li>
+        </ul></div>
+      <div class="card"><h3><i>🧭</i>省区与归属</h3>
+        <ul>
+          <li>取省 / 刷省笔刷、省区撤销</li>
+          <li>按省着色渲染，城市归属直接改</li>
+        </ul></div>
+      <div class="card"><h3><i>📜</i>事件编辑</h3>
+        <ul>
+          <li>44 字节事件全部 15 个字段可改</li>
+          <li>触发方式/事件类型下拉（回合到、消灭单位、刷兵…）</li>
+          <li>新增 / 复制 / 删除 / 清空 + 字段说明</li>
+        </ul></div>
+      <div class="card"><h3><i>📐</i>地图尺寸</h3>
+        <ul>
+          <li>四方向扩展 / 收缩（内容坐标自动重映射）</li>
+          <li>截取地图（起点→终点框选）</li>
+          <li>生成 world.bin、校验并修复</li>
+        </ul></div>
     </div>
   </div>
 </section>
 
-<section id="how">
+<section id="mod">
   <div class="wrap">
-    <div class="sec-h"><h2>使用流程</h2></div>
-    <div class="steps">
-      <div class="step"><b>1. 打开文件</b><p>战役 stage、征服 conquest、world.bin / map.bin，或者 APK 里的地图。</p></div>
-      <div class="step"><b>2. 改</b><p>地形、城市、兵种、省区、国家，改到你满意。</p></div>
-      <div class="step"><b>3. 保存</b><p>导出 btl / bin。征服的地形和关卡要一起保存。</p></div>
-      <div class="step"><b>4. 放进游戏</b><p>文件放回游戏数据目录的 bin/ 里。强烈建议先备份原文件。</p></div>
+    <h2>模组支持 <em>（重点功能）</em></h2>
+    <p class="sub">想让编辑器显示你模组里的旗帜和图标？导入一次就行。</p>
+    <div class="split">
+      <div class="panel">
+        <h3>三步搞定</h3>
+        <ol class="steps">
+          <li>首页左下角点「<b>模组</b>」→「导入模组（文件夹）」，选解包后的模组目录（含 <span class="kbd">assets</span>），也可以直接选模组 apk</li>
+          <li>编辑器自动从 <span class="kbd">tacticalmap</span>、<span class="kbd">image_flags_hd</span>、<span class="kbd">buildings_hd</span>、<span class="kbd">terrain_hd</span> 等图集里切出素材，按内置目录结构存好</li>
+          <li>之后打开任何地图，显示的国旗、兵种图标、建筑、地形贴图、将领头像、国家与兵种名字，全按你的模组来</li>
+        </ol>
+      </div>
+      <div class="panel">
+        <h3>连地图一起管</h3>
+        <ul class="steps" style="list-style:none;counter-reset:none">
+          <li>模组里 <span class="kbd">assets/stage</span> 的上千个 btl 直接列出来：搜索框 + 战役/征服/事件分区，不用翻</li>
+          <li>打开征服自动读模组对应的 <span class="kbd">world{N}.bin</span> 底图，不用手动选</li>
+          <li>改完点保存 → <b>直接覆盖回模组里那个 btl</b>，覆盖前自动备份到 <span class="kbd">地图编辑器/模组备份/</span></li>
+          <li>没有导入模组？那就用编辑器自带的素材，功能一样完整</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="shots">
+  <div class="wrap">
+    <h2>界面预览</h2>
+    <p class="sub">把截图放在这个网页同目录、命名为 <span class="kbd">shot1.png</span>…<span class="kbd">shot4.png</span> 就会自动显示。</p>
+    <div class="shots">
+      <div class="shot"><img src="shot1.png" alt="" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'shot-ph',textContent:'截图占位 shot1.png'}))"></div>
+      <div class="shot"><img src="shot2.png" alt="" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'shot-ph',textContent:'截图占位 shot2.png'}))"></div>
+      <div class="shot"><img src="shot3.png" alt="" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'shot-ph',textContent:'截图占位 shot3.png'}))"></div>
+      <div class="shot"><img src="shot4.png" alt="" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'shot-ph',textContent:'截图占位 shot4.png'}))"></div>
     </div>
   </div>
 </section>
 
 <section id="download">
   <div class="wrap">
+    <h2>下载</h2>
+    <p class="sub">免费使用，点下面的按钮直接装。</p>
     <div class="dl">
-      <h2>下载</h2>
-      <p>安卓 · v1.5 内测版<br>安装包发布后会直接放在这里，也可以进群拿最新版</p>
-      <div style="margin-bottom:26px"><a class="btn btn-p" href="#" id="dlBtn">下载 APK</a></div>
-      <p style="margin-bottom:8px">交流群：</p>
-      <div class="group" id="groupNum" title="点击复制群号">1001026138</div>
-      <div><button class="btn btn-o" id="copyBtn" type="button">复制群号</button></div>
-      <p class="tips">内测版，有些边角可能没做好，遇到问题直接群里找我。<br>装新版前先卸载旧版。</p>
+      <div class="row">
+        <div>
+          <div class="ver">当前版本：<b id="verName">v2.1</b> <span id="verDate"></span></div>
+          <div class="ver" style="margin-top:4px">文件：Terrain Editor 正式版（约 14 MB）</div>
+        </div>
+        <div class="btns">
+          <a class="btn btn-p" id="dlBtn" href="https://dx.xckeji.xyz/apk/TerrainEditor-debug.apk">⬇ 下载 APK</a>
+          <a class="btn btn-o" href="https://github.com/luyuanmarker/Terrain-Editor-Android" target="_blank" rel="noopener">GitHub 仓库</a>
+        </div>
+      </div>
+      <div class="notes" id="dlNotes">正在读取最新版本信息…</div>
+      <ul class="note-list">
+        <li>装之前建议先<b>卸载旧版</b>；覆盖安装有时不生效。</li>
+        <li>首次打开需要允许「安装未知应用」与存储权限（保存地图要写文件）。</li>
+        <li>如果上面的按钮打不开，用备用直链：<a id="dlAlt" href="https://dx.xckeji.xyz/apk/TerrainEditor-debug.apk">dx.xckeji.xyz/apk/TerrainEditor-debug.apk</a></li>
+      </ul>
     </div>
   </div>
 </section>
 
-<section>
+<section id="donate">
   <div class="wrap">
-    <div class="sec-h"><h2>一些说明</h2></div>
-    <details open>
-      <summary>支持哪些文件？</summary>
-      <p>战役 stageXXXX.btl、征服 conquestXXXX.btl、世界地形 world.bin / map.bin，还有 APK 压缩包里的 .btl / .bin。</p>
-    </details>
-    <details>
-      <summary>要 ROOT 吗？</summary>
-      <p>不用。编辑器只需要存储权限。把文件放回游戏目录那步，看你手机怎么处理，跟编辑器无关。</p>
-    </details>
-    <details>
-      <summary>改坏了怎么办？</summary>
-      <p>改之前备份原文件。编辑器里有撤销，但最保险的还是备份。</p>
-    </details>
+    <h2>捐赠支持</h2>
+    <p class="sub">这个编辑器一直免费、无广告。如果它帮你省了时间，可以请作者喝杯咖啡 —— 全凭自愿，捐不捐功能都一样。</p>
+    <div class="donate">
+      <div class="qr">
+        <img src="donate_wechat.png" alt="微信赞赏码" onerror="this.style.display='none';this.nextElementSibling.style.display='block'">
+        <div class="ph" style="display:none">收款码占位：把微信赞赏码图片命名 <b>donate_wechat.png</b> 放到网页同目录即可显示</div>
+        <div class="cap">微信赞赏</div>
+      </div>
+      <div class="qr">
+        <img src="donate_alipay.png" alt="支付宝收款码" onerror="this.style.display='none';this.nextElementSibling.style.display='block'">
+        <div class="ph" style="display:none">收款码占位：把支付宝收款码图片命名 <b>donate_alipay.png</b> 放到网页同目录即可显示</div>
+        <div class="cap">支付宝</div>
+      </div>
+    </div>
+    <div class="tip">
+      捐赠用于服务器与开发成本，不影响任何功能；也不代表购买、定制或优先支持。<br>
+      不想捐也没关系 —— 帮作者<a href="#group">转发给需要的玩家</a>、或者在交流群里反馈 bug，同样是很大的帮助。
+    </div>
+  </div>
+</section>
+
+<section id="group">
+  <div class="wrap">
+    <h2>交流与反馈</h2>
+    <p class="sub">遇到问题、想提功能、想拿最新版，都来这里。</p>
+    <div class="grid">
+      <div class="card"><h3><i>💬</i>交流群</h3>
+        <p>QQ 群：<b>1001026138</b><br>进群获取新版本、素材与教程；群文件里也有历史版本。</p></div>
+      <div class="card"><h3><i>🐙</i>GitHub</h3>
+        <p><a href="https://github.com/luyuanmarker/Terrain-Editor-Android" target="_blank" rel="noopener">luyuanmarker/Terrain-Editor-Android</a><br>源码、更新日志、问题反馈都在这。</p></div>
+      <div class="card"><h3><i>✍️</i>作者</h3>
+        <p>AC小辰 · 小辰科技官方<br>反馈 bug 时请带上：地图文件、操作步骤、手机型号。</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="disclaimer">
+  <div class="wrap">
+    <h2>免责声明</h2>
+    <div class="card" style="border-color:#3d3550">
+      <p>
+        本工具为个人爱好者制作的<b>非官方</b>第三方工具，与原游戏开发商 EasyTech 无任何关联，不包含原游戏的任何代码、音频与付费数据。<br><br>
+        使用本工具修改地图产生的一切后果（包括但不限于存档损坏、游戏异常等）由使用者自行承担；请勿用于商业用途、传播违法内容或侵犯他人权益的行为。<br><br>
+        导入模组功能只读取你自己提供的模组素材用于本地显示，不会上传、不会分发。
+      </p>
+    </div>
   </div>
 </section>
 
 <footer>
   <div class="wrap">
-    <p><b>WC4 地形编辑器</b> · v1.5 内测版</p>
-    <p style="margin-top:4px">作者：【你的名字/B站ID】 · 交流群 1001026138 · 新版本和功能都会先在群里发</p>
+    WC4 地形编辑器 · 非官方工具 · 与 EasyTech 无关<br>
+    作者：AC小辰（小辰科技官方）　QQ 群 1001026138
   </div>
 </footer>
 
 <script>
-  document.getElementById('copyBtn').addEventListener('click', function () {
-    var text = '1001026138';
-    var done = function () {
-      var btn = this;
-      btn.textContent = '已复制';
-      setTimeout(function () { btn.textContent = '复制群号'; }, 2000);
-    }.bind(this);
-    if (navigator.clipboard) {
-      navigator.clipboard.writeText(text).then(done, function () { fallbackCopy(text); done(); });
-    } else { fallbackCopy(text); done(); }
-  });
-  function fallbackCopy(text) {
-    var ta = document.createElement('textarea');
-    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
-    document.body.appendChild(ta); ta.select();
-    try { document.execCommand('copy'); } catch (e) { }
-    document.body.removeChild(ta);
+// 从服务器拉最新版本信息（拿不到就用页面里的静态信息）
+(function(){
+  var API = 'https://dx.xckeji.xyz/update.php';
+  var fallback = 'https://dx.xckeji.xyz/apk/TerrainEditor-debug.apk';
+  function apply(info){
+    if(!info) return;
+    var name = info.versionName || info.version || '';
+    if(name){ document.getElementById('verName').textContent = 'v' + String(name).replace(/^v/,''); }
+    var url = info.url || fallback;
+    document.getElementById('dlBtn').href = url;
+    document.getElementById('dlAlt').href = url;
+    document.getElementById('dlAlt').textContent = url.replace(/^https?:\/\//,'');
+    var notes = info.notes || info.desc || '';
+    document.getElementById('dlNotes').textContent = notes ? ('更新内容：\n' + notes) : '已是最新版，点上面按钮下载即可。';
+    if(info.date){ document.getElementById('verDate').textContent = '· ' + info.date; }
   }
-  document.getElementById('dlBtn').addEventListener('click', function (e) {
-    if (this.getAttribute('href') === '#') {
-      e.preventDefault();
-      alert('安装包还没放出来，先进群 1001026138 拿最新版吧。');
-    }
-  });
+  fetch(API, {cache:'no-store'}).then(function(r){ return r.json(); })
+    .then(function(j){ apply(j && (j.ok ? (j.data || j) : (j.latest || null))); })
+    .catch(function(){ document.getElementById('dlNotes').textContent =
+      '读取版本信息失败（不影响下载），点上面的按钮即可下载最新版 APK。'; });
+})();
 </script>
 </body>
 </html>
