@@ -159,13 +159,19 @@ public class HexMapView extends View {
                 levelIcons[i] = load("image/status/lv_" + i + ".png");
             }
             // 精英兵种：加载 1~128 号图标（含 41+ 精英），缺失时用 _r_ 变体兜底
-            for (int i = 1; i <= 128; i++) {
+            // 兵种图标：按实际存在的编号加载（模组里有更多编号时也能全读）
+            java.util.TreeSet<Integer> legionIds = com.xckeji.bj.mod.ModAssets.idsIn(getContext(), "legion", "legion_icon_");
+            if (legionIds.isEmpty()) for (int i = 1; i <= 101; i++) legionIds.add(i);
+            for (int i : legionIds) {
                 Bitmap b = load("legion/legion_icon_" + i + ".png");
                 if (b != null) legionBmps.put(i, b);
                 Bitmap br = load("legion/legion_icon_r_" + i + ".png");
                 if (br != null) legionBmpsR.put(i, br);
             }
-            for (int i = 1; i <= 49; i++) {
+            // 国旗：按实际存在的编号加载（模组的国家国旗可能到 90 多号）
+            java.util.TreeSet<Integer> flagIds = com.xckeji.bj.mod.ModAssets.idsIn(getContext(), "flag", "flag_");
+            if (flagIds.isEmpty()) for (int i = 1; i <= 48; i++) flagIds.add(i);
+            for (int i : flagIds) {
                 Bitmap b = load("flag/flag_" + i + ".png");
                 if (b != null) flagBmps.put(i, b);
             }
@@ -178,7 +184,14 @@ public class HexMapView extends View {
                     if (b != null) terrainBmps.put(g + "_" + v, b);
                 }
             }
-            int[] bids = {1,2,3,11,12,13,14,15,16,17,21,22,23,31,32,33,34};
+            // 建筑图标：固定那批 + 模组里多出来的编号
+            java.util.TreeSet<Integer> bset = com.xckeji.bj.mod.ModAssets.idsIn(getContext(), "btl", "building_");
+            bset.add(1); bset.add(2); bset.add(3); bset.add(11); bset.add(12); bset.add(13); bset.add(14);
+            bset.add(15); bset.add(16); bset.add(17); bset.add(21); bset.add(22); bset.add(23);
+            bset.add(31); bset.add(32); bset.add(33); bset.add(34);
+            int[] bids = new int[bset.size()];
+            int bi = 0;
+            for (int v : bset) bids[bi++] = v;
             for (int id : bids) {
                 Bitmap b = load("btl/building_" + id + ".png");
                 if (b != null) buildingBmps.put(id, b);
@@ -372,8 +385,12 @@ public class HexMapView extends View {
         Bitmap b = generalBmps.get(generalId);
         if (b == null) {
             com.xckeji.bj.model.GeneralData g = com.xckeji.bj.model.GeneralData.BY_ID.get(generalId);
-            int photo = (g != null && g.photo > 0) ? g.photo : -1;
-            if (photo > 0) b = load("general/" + photo + ".webp");
+            String photo = (g != null && g.photo != null) ? g.photo : "";
+            if (!photo.isEmpty()) {
+                // Photo 是名字（Manstein / 姚子青）→ general/<名字>.webp；个别版本是数字也照旧试一遍
+                b = load("general/" + photo + ".webp");
+                if (b == null) b = load("general/" + photo + ".png");
+            }
             if (b != null) generalBmps.put(generalId, b);
         }
         return b;

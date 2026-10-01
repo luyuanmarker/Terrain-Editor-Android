@@ -142,6 +142,32 @@ public class ModAssets {
         return out;
     }
 
+    /**
+     * 列出「目录 + 前缀」下的编号集合（模组目录和内置 assets 合并），
+     * 例如 idsIn(ctx,"flag","flag_") 会给出 1..95（模组有 95 面国旗时也能全加载）。
+     */
+    public static java.util.TreeSet<Integer> idsIn(Context ctx, String dir, String prefix) {
+        java.util.TreeSet<Integer> out = new java.util.TreeSet<>();
+        if (currentDir != null) {
+            File d = new File(currentDir, dir);
+            File[] fs = d.listFiles();
+            if (fs != null) for (File f : fs) addNum(f.getName(), prefix, out);
+        }
+        try {
+            String[] fs = ctx.getAssets().list(dir);
+            if (fs != null) for (String f : fs) addNum(f, prefix, out);
+        } catch (Exception ignored) { }
+        return out;
+    }
+
+    private static void addNum(String fileName, String prefix, java.util.Set<Integer> out) {
+        String n = fileName;
+        int dot = n.lastIndexOf('.');
+        if (dot > 0) n = n.substring(0, dot);
+        if (!n.startsWith(prefix)) return;
+        try { out.add(Integer.parseInt(n.substring(prefix.length()).trim())); } catch (Exception ignored) { }
+    }
+
     public static Bitmap decode(Context ctx, String path) {
         InputStream in = null;
         try {

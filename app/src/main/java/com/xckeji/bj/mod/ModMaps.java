@@ -84,6 +84,53 @@ public class ModMaps {
     }
 
     /**
+     * 找模组里的世界底图：按 config/def_map.xml 里「地图序号 → 文件名」查，
+     * 找不到就按 world{N}.bin / world.bin 兜底。文件放在导入时的 bin/ 目录（导入时已拷好）。
+     */
+    public static byte[] findWorldBin(Context ctx, String modName, int mapId) {
+        File dir = new File(ModAssets.modsBase(ctx), modName);
+        String fromDef = defMapFile(ctx, modName, mapId);
+        List<String> names = new ArrayList<>();
+        if (fromDef != null) names.add(fromDef);
+        if (mapId > 0) names.add("world" + mapId + ".bin");
+        names.add("world.bin");
+        for (String n : names) {
+            File f = new File(new File(dir, "bin"), n);
+            if (f.isFile()) {
+                try {
+                    byte[] d = new byte[(int) f.length()];
+                    java.io.FileInputStream in = new java.io.FileInputStream(f);
+                    try {
+                        int off = 0, r;
+                        while (off < d.length && (r = in.read(d, off, d.length - off)) > 0) off += r;
+                    } finally { ModAssets.close(in); }
+                    return d;
+                } catch (Exception ignored) { }
+            }
+        }
+        return null;
+    }
+
+    /** 解析模组 config/def_map.xml 里该地图序号对应的底图文件名。 */
+    private static String defMapFile(Context ctx, String modName, int mapId) {
+        try {
+            File f = new File(new File(ModAssets.modsBase(ctx), modName), "config/def_map.xml");
+            if (!f.isFile()) return null;
+            byte[] d = new byte[(int) f.length()];
+            java.io.FileInputStream in = new java.io.FileInputStream(f);
+            try {
+                int off = 0, r;
+                while (off < d.length && (r = in.read(d, off, d.length - off)) > 0) off += r;
+            } finally { ModAssets.close(in); }
+            String xml = new String(d, "UTF-8");
+            java.util.regex.Matcher m = java.util.regex.Pattern
+                    .compile("<map\\s+id=\"" + mapId + "\"[^>]*file=\"([^\"]+)\"").matcher(xml);
+            if (m.find()) return m.group(1);
+        } catch (Exception ignored) { }
+        return null;
+    }
+
+    /**
      * 保存回写：先备份到 /sdcard/地图编辑器/模组备份/&lt;模组名&gt;/&lt;文件名&gt;.&lt;时间&gt;.bak，
      * 再把新内容覆盖回模组里的那个 btl。返回备份文件路径（失败返回 null）。
      */

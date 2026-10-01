@@ -13,7 +13,7 @@ public class GeneralData {
     public int id;
     public String name;
     public String ename;
-    public int photo;
+    public String photo;      // Photo 字段是字符串（如 Manstein / 姚子青），个别版本是数字也兼容
     public int[] medals = new int[6];   // 胸章一/二/三 + 勋带一/二/三
     public int[] skills = new int[0];   // 技能ID列表
 
@@ -34,7 +34,8 @@ public class GeneralData {
                 g.id = id;
                 g.name = o.optString("Name", "");
                 g.ename = o.optString("EName", "");
-                g.photo = o.optInt("Photo", 0);
+                if (o.has("Photo")) g.photo = String.valueOf(o.opt("Photo")).trim();
+                else g.photo = "";
                 if (o.has("Medals")) {
                     try {
                         org.json.JSONArray ma = o.getJSONArray("Medals");

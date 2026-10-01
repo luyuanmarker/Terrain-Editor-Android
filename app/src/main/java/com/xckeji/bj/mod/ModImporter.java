@@ -104,7 +104,8 @@ public class ModImporter {
                 }
                 if (atlasBmp == null) continue;
                 String xml = new String(readDoc(ctx, treeUri, xmlDoc), "UTF-8");
-                int cut = cutAtlas(modDir, xml, atlasBmp, builtinIndex, r);
+                int cut = cutAtlas(modDir, xml, atlasBmp, builtinIndex, r,
+                        "terrain_hd".equals(atlas) ? "map/" : null);
                 atlasBmp.recycle();
                 r.atlasInfo.add(atlas + "：" + cut + " 张");
                 step(cb, atlas + " → " + cut + " 张");
@@ -134,7 +135,7 @@ public class ModImporter {
                     if (base.startsWith("general_")) base = base.substring("general_".length());
                     String target = builtinIndex.get((base + ".webp").toLowerCase());
                     if (target == null) target = builtinIndex.get((base + ".png").toLowerCase());
-                    if (target == null) { r.skipped++; continue; }
+                    if (target == null) target = "general/" + base + ".webp";   // 模组特有将领
                     ModAssets.writeModFile(modDir, target, readDocUri(ctx, treeUri, child[1]));
                     r.copied++;
                 }
@@ -148,6 +149,15 @@ public class ModImporter {
                     r.copied++;
                 }
             }
+            // 世界底图（world.bin / world2.bin / mapN.bin）：存到 bin/，打开征服时自动用
+            step(cb, "正在读取世界底图…");
+            for (String binName : new String[]{"world.bin", "world2.bin", "world3.bin",
+                    "map1.bin", "map2.bin", "map1_hd.bin", "map2_hd.bin"}) {
+                String doc = findDocIn(ctx, treeUri, rootDocId, binName);
+                if (doc == null) continue;
+                ModAssets.writeModFile(modDir, "bin/" + binName, readDoc(ctx, treeUri, doc));
+                r.copied++;
+            }
             if (r.images == 0 && r.copied == 0) {
                 r.error = "没找到可用素材（要选解包后的模组根目录，里面应有 assets/ 或 image/、json/）";
             }
@@ -160,9 +170,29 @@ public class ModImporter {
 
     private static void step(Progress cb, String msg) { if (cb != null) cb.onStep(msg); }
 
+    /** apk 模式：assets 根目录下的 world*.bin / mapN.bin / mapN_hd.bin（世界底图）。 */
+    private static boolean isWorldBinEntry(String en) {
+        if (!en.startsWith("assets/") || !en.endsWith(".bin")) return false;
+        String fn = en.substring("assets/".length());
+        if (fn.contains("/")) return false;
+        String low = fn.toLowerCase();
+        if (!(low.startsWith("world") || low.startsWith("map"))) return false;
+        return !low.contains("anim") && !low.startsWith("maptext");
+    }
+
     /** 按图集 xml 把里面的小图裁出来，落到内置素材对应的目录。返回裁出张数。 */
     private static int cutAtlas(File modDir, String xml, Bitmap atlasBmp,
                                 Map<String, String> builtinIndex, Result r) throws Exception {
+        return cutAtlas(modDir, xml, atlasBmp, builtinIndex, r, null);
+    }
+
+    /**
+     * @param fallbackDir 内置素材里找不到同名文件时的兜底目录（null = 跳过）。
+     *                    模组特有的国旗/兵种图标/建筑编号就靠它存下来。
+     */
+    private static int cutAtlas(File modDir, String xml, Bitmap atlasBmp,
+                                Map<String, String> builtinIndex, Result r,
+                                String fallbackDir) throws Exception {
         int cut = 0;
         Matcher m = Pattern.compile(
                 "<Image\\s+name=\"([^\"]+)\"\\s+x=\"(\\d+)\"\\s+y=\"(\\d+)\"\\s+w=\"(\\d+)\"\\s+h=\"(\\d+)\"")
@@ -175,7 +205,11 @@ public class ModImporter {
                     || x + w > atlasBmp.getWidth() || y + h > atlasBmp.getHeight()) continue;
             String target = builtinIndex.get(name.toLowerCase());
             if (target == null) target = builtinIndex.get(stripExt(name).toLowerCase());
-            if (target == null) { r.skipped++; continue; }
+            if (target == null) {
+                String fb = fallbackDirFor(name, fallbackDir);
+                if (fb == null) { r.skipped++; continue; }
+                target = fb + name;
+            }
             Bitmap sub = Bitmap.createBitmap(atlasBmp, x, y, w, h);
             ByteArrayOutputStream bos = new ByteArrayOutputStream();
             sub.compress(Bitmap.CompressFormat.PNG, 100, bos);
@@ -185,6 +219,20 @@ public class ModImporter {
             cut++;
         }
         return cut;
+    }
+
+    /** 内置里没有同名文件时，按名字前缀决定放到哪个目录（模组特有素材靠这个）。 */
+    private static String fallbackDirFor(String name, String atlasFallback) {
+        String n = name.toLowerCase();
+        if (n.startsWith("flag_")) return "flag/";
+        if (n.startsWith("legion_icon_")) return "legion/";
+        if (n.startsWith("building_")) return "building/";
+        if (n.startsWith("facility_") || n.startsWith("city_feature_")
+                || n.startsWith("antiair") || n.startsWith("formation") || n.startsWith("lv_")) {
+            return "image/status/";
+        }
+        if (n.startsWith("wonder_")) return "image/status/";
+        return atlasFallback;
     }
 
     /**
@@ -209,6 +257,11 @@ public class ModImporter {
             }
             for (String js : JSONS) want.add("assets/json/" + js);
             want.add("assets/config/def_map.xml");
+            // 世界底图（征服用）：world.bin / world2.bin / mapN.bin / mapN_hd.bin
+            for (String bin : new String[]{"world.bin", "world2.bin", "world3.bin",
+                    "map1.bin", "map2.bin", "map1_hd.bin", "map2_hd.bin"}) {
+                want.add("assets/" + bin);
+            }
 
             Map<String, String> builtinIndex = indexBuiltin(ctx);
             java.util.Map<String, byte[]> got = new java.util.HashMap<>();
@@ -224,7 +277,8 @@ public class ModImporter {
                     if (e.isDirectory()) continue;
                     boolean need = want.contains(en)
                             || en.startsWith("assets/image/generalphoto/")
-                            || en.startsWith("assets/generalphoto/");
+                            || en.startsWith("assets/generalphoto/")
+                            || isWorldBinEntry(en);
                     if (!need) continue;
                     ByteArrayOutputStream bos = new ByteArrayOutputStream();
                     byte[] buf = new byte[16384];
@@ -254,7 +308,8 @@ public class ModImporter {
                 if (imgB == null) continue;
                 Bitmap bmp = BitmapFactory.decodeByteArray(imgB, 0, imgB.length);
                 if (bmp == null) continue;
-                int cut = cutAtlas(modDir, new String(xmlB, java.nio.charset.Charset.forName("UTF-8")), bmp, builtinIndex, r);
+                int cut = cutAtlas(modDir, new String(xmlB, java.nio.charset.Charset.forName("UTF-8")),
+                        bmp, builtinIndex, r, "terrain_hd".equals(atlas) ? "map/" : null);
                 bmp.recycle();
                 r.atlasInfo.add(atlas + "：" + cut + " 张");
                 step(cb, atlas + " → " + cut + " 张");
@@ -270,13 +325,22 @@ public class ModImporter {
                 ModAssets.writeModFile(modDir, "config/def_map.xml", dm);
                 r.copied++;
             }
+            // 世界底图存到 bin/，打开征服时自动用（不用再让用户手动选 bin）
+            for (java.util.Map.Entry<String, byte[]> en : got.entrySet()) {
+                String k = en.getKey();
+                if (!isWorldBinEntry(k)) continue;
+                String fn = k.substring("assets/".length());
+                ModAssets.writeModFile(modDir, "bin/" + fn, en.getValue());
+                r.copied++;
+            }
             for (String[] g : generals) {
                 String base = stripExt(g[0]);
                 if (base.startsWith("general_")) base = base.substring("general_".length());
                 String target = builtinIndex.get((base + ".webp").toLowerCase());
                 if (target == null) target = builtinIndex.get((base + ".png").toLowerCase());
+                if (target == null) target = "general/" + base + ".webp";   // 模组特有将领
                 byte[] d = got.get("gen:" + g[0]);
-                if (target == null || d == null) { r.skipped++; continue; }
+                if (d == null) { r.skipped++; continue; }
                 ModAssets.writeModFile(modDir, target, d);
                 r.copied++;
             }

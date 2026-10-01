@@ -856,7 +856,9 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         Bitmap b = generalThumbCache.get(id);
         if (b == null) {
             GeneralData g = GeneralData.BY_ID.get(id);
-            if (g != null && g.photo > 0) b = loadBmp("general/" + g.photo + ".webp");
+            if (g != null && g.photo != null && !g.photo.isEmpty()) {
+                b = loadBmp("general/" + g.photo + ".webp");
+            }
             if (b != null) generalThumbCache.put(id, b);
         }
         return b;
@@ -4346,6 +4348,10 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
     private static final int REQUEST_MOD_TREE = 310;
     private static final int REQUEST_MOD_APK = 311;
     private long lastImportMs = 0L;
+    /** 模组地图列表的搜索关键字与分区（“全部/战役/征服/事件/其他”）。 */
+    private String modMapQuery = "";
+    private String modMapKind = "全部";
+    private LinearLayout modMapListHost;
 
     /** 导入后立刻刷新素材（图标/贴图/配置都在 onCreate 里读，这里重新载入一遍）。 */
     private void reloadAssetsAfterModChange() {
@@ -4530,40 +4536,117 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
             mapTitle.setTypeface(null, android.graphics.Typeface.BOLD);
             mapTitle.setPadding(0, (int) (12 * dp), 0, (int) (4 * dp));
             root.addView(mapTitle);
+            // 搜索框：直接输入文件名片段过滤（不用一直往下翻）
+            final EditText search = new EditText(this);
+            search.setHint("搜索地图文件名，例如 stage101 或 conquest1");
+            search.setSingleLine(true);
+            search.setTextColor(Color.WHITE);
+            search.setHintTextColor(0xFF9ca3af);
+            search.setBackgroundColor(0xFF374151);
+            search.setText(modMapQuery);
+            search.addTextChangedListener(new android.text.TextWatcher() {
+                @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
+                @Override public void onTextChanged(CharSequence s, int a, int b, int c) { }
+                @Override public void afterTextChanged(android.text.Editable s) {
+                    modMapQuery = s.toString().trim();
+                    renderModMapList(cur, dp);
+                }
+            });
+            root.addView(search, new LinearLayout.LayoutParams(-1, (int) (42 * dp)));
+            // 分区按钮：全部 / 战役 / 征服 / 事件 / 其他
+            LinearLayout filters = new LinearLayout(this);
+            filters.setOrientation(LinearLayout.HORIZONTAL);
+            filters.setGravity(Gravity.CENTER_VERTICAL);
+            final String[] kinds = {"全部", "战役", "征服", "事件", "其他"};
+            for (final String k : kinds) {
+                Button b = new Button(this);
+                b.setText(k);
+                b.setTextSize(12);
+                b.setAllCaps(false);
+                boolean on = k.equals(modMapKind);
+                android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable();
+                if (on) {
+                    g.setColors(new int[]{0xFF4f8ef7, 0xFF1d4ed8});
+                    g.setOrientation(android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM);
+                } else {
+                    g.setColor(0xFFE8ECF4);
+                }
+                g.setCornerRadius(8 * dp);
+                b.setBackground(g);
+                b.setTextColor(on ? Color.WHITE : 0xFF1f2937);
+                b.setOnClickListener(v -> {
+                    modMapKind = k;
+                    renderModPage();
+                });
+                LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(-2, (int) (36 * dp));
+                blp.setMargins(0, (int) (6 * dp), (int) (8 * dp), (int) (4 * dp));
+                filters.addView(b, blp);
+            }
+            root.addView(filters);
             ScrollView sv = new ScrollView(this);
-            LinearLayout maps = new LinearLayout(this);
-            maps.setOrientation(LinearLayout.VERTICAL);
-            java.util.List<com.xckeji.bj.mod.ModMaps.Entry> entries =
-                    com.xckeji.bj.mod.ModMaps.list(this, cur);
-            if (entries.isEmpty()) {
-                TextView none = new TextView(this);
-                none.setText("读不到 stage/ 目录（模组位置可能已失效，重新导入一次即可）");
-                none.setTextSize(12);
-                none.setTextColor(0xFF6b7280);
-                maps.addView(none);
-            }
-            for (final com.xckeji.bj.mod.ModMaps.Entry e : entries) {
-                LinearLayout row = new LinearLayout(this);
-                row.setOrientation(LinearLayout.HORIZONTAL);
-                row.setGravity(Gravity.CENTER_VERTICAL);
-                row.setPadding((int) (6 * dp), (int) (7 * dp), (int) (6 * dp), (int) (7 * dp));
-                row.setClickable(true);
-                row.setOnClickListener(v -> openModMap(cur, e));
-                TextView tv = new TextView(this);
-                tv.setText("[" + e.kind() + "] " + e.name);
-                tv.setTextSize(13);
-                tv.setTextColor(0xFF1f2937);
-                row.addView(tv);
-                maps.addView(row);
-                View div = new View(this);
-                div.setLayoutParams(new LinearLayout.LayoutParams(-1, 1));
-                div.setBackgroundColor(0xFFEDF1F7);
-                maps.addView(div);
-            }
-            sv.addView(maps);
+            modMapListHost = new LinearLayout(this);
+            modMapListHost.setOrientation(LinearLayout.VERTICAL);
+            sv.addView(modMapListHost);
             root.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1f));
+            renderModMapList(cur, dp);
         } else {
             root.addView(new View(this), new LinearLayout.LayoutParams(-1, 0, 1f));
+        }
+    }
+
+    /** 模组地图列表：按分区 + 搜索关键字过滤后显示。 */
+    private void renderModMapList(String modName, float dp) {
+        if (modMapListHost == null) return;
+        modMapListHost.removeAllViews();
+        java.util.List<com.xckeji.bj.mod.ModMaps.Entry> all =
+                com.xckeji.bj.mod.ModMaps.list(this, modName);
+        int total = all.size(), shown = 0;
+        int cStage = 0, cConq = 0, cEvent = 0, cOther = 0;
+        for (com.xckeji.bj.mod.ModMaps.Entry e : all) {
+            String k = e.kind();
+            if ("战役".equals(k)) cStage++;
+            else if ("征服".equals(k)) cConq++;
+            else if ("事件".equals(k)) cEvent++;
+            else cOther++;
+        }
+        TextView sum = new TextView(this);
+        sum.setText("共 " + total + " 个：战役 " + cStage + "　征服 " + cConq
+                + "　事件 " + cEvent + "　其他 " + cOther
+                + (modMapQuery.isEmpty() ? "" : "　（筛选：" + modMapQuery + "）"));
+        sum.setTextSize(12);
+        sum.setTextColor(0xFF6b7280);
+        sum.setPadding(0, (int) (2 * dp), 0, (int) (4 * dp));
+        modMapListHost.addView(sum);
+        String q = modMapQuery.toLowerCase(java.util.Locale.US);
+        for (final com.xckeji.bj.mod.ModMaps.Entry e : all) {
+            if (!"全部".equals(modMapKind) && !modMapKind.equals(e.kind())) continue;
+            if (!q.isEmpty() && !e.name.toLowerCase(java.util.Locale.US).contains(q)) continue;
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding((int) (6 * dp), (int) (7 * dp), (int) (6 * dp), (int) (7 * dp));
+            row.setClickable(true);
+            row.setOnClickListener(v -> openModMap(modName, e));
+            TextView tv = new TextView(this);
+            tv.setText("[" + e.kind() + "] " + e.name);
+            tv.setTextSize(13);
+            tv.setTextColor(0xFF1f2937);
+            row.addView(tv);
+            modMapListHost.addView(row);
+            View div = new View(this);
+            div.setLayoutParams(new LinearLayout.LayoutParams(-1, 1));
+            div.setBackgroundColor(0xFFEDF1F7);
+            modMapListHost.addView(div);
+            shown++;
+        }
+        if (shown == 0) {
+            TextView none = new TextView(this);
+            none.setText(all.isEmpty()
+                    ? "读不到 stage/ 目录（模组位置可能已失效，重新导入一次即可）"
+                    : "没有匹配的地图（换个关键字或点「全部」）");
+            none.setTextSize(12);
+            none.setTextColor(0xFF6b7280);
+            modMapListHost.addView(none);
         }
     }
 
@@ -4576,14 +4659,24 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
             currentFileName = e.name;
             modMapTarget = e;
             modMapOriginal = data;
-            hexMapView.setMapData(mapData);
-            if (!FileParser.parseBTLHeader(data).independentTerrain) {
-                Toast.makeText(this, "这是征服/截取地图，还需要用「打开地图」加载 world*.bin 才能改地形",
-                        Toast.LENGTH_LONG).show();
+            FileParser.BtlHeaderInfo h = FileParser.parseBTLHeader(data);
+            String binNote = "";
+            if (!h.independentTerrain) {
+                // 征服/截取地图：自动从模组里取对应的世界底图，不用再手动选 bin
+                byte[] bin = com.xckeji.bj.mod.ModMaps.findWorldBin(this, modName, h.mapId);
+                if (bin != null) {
+                    mapData.binOriginalData = bin;
+                    mapData.binFileName = "world" + (h.mapId > 0 ? h.mapId : "") + ".bin";
+                    try { FileParser.loadConquestTerrain(mapData, bin); } catch (Exception ignored) { }
+                    binNote = "\n已自动载入模组底图（地图序号 " + h.mapId + "）";
+                } else {
+                    binNote = "\n⚠️ 模组里没找到对应世界底图，地形部分要先自己加载 bin";
+                }
             }
+            hexMapView.setMapData(mapData);
             modOverlay.setVisibility(View.GONE);
             enterEditorAfterLoad();
-            Toast.makeText(this, "已打开模组地图：" + e.name + "\n保存时会覆盖回模组并自动备份",
+            Toast.makeText(this, "已打开模组地图：" + e.name + binNote + "\n保存时会覆盖回模组并自动备份",
                     Toast.LENGTH_LONG).show();
         } catch (Exception ex) {
             Toast.makeText(this, "打开失败：" + ex.getMessage(), Toast.LENGTH_LONG).show();
