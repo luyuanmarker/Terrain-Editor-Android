@@ -401,8 +401,13 @@ public class HexMapView extends View {
         Bitmap img = generalPortrait(a.general);
         if (img == null) return;
         float sr = s / 50f;
-        float sw = img.getWidth() * 0.8f * sr;
-        float sh = img.getHeight() * 0.8f * sr;
+        // 统一按内置头像的显示框（54×60）来定尺寸：模组头像原图可能好几百像素，不能按原图尺寸放
+        float refW = 54f * 0.8f * sr;
+        float refH = 60f * 0.8f * sr;
+        float ratio = img.getHeight() / (float) Math.max(1, img.getWidth());
+        float sw = refH / ratio;
+        float sh = refH;
+        if (sw > refW) { sw = refW; sh = refW * ratio; }
         if (sw < 2f) sw = 2f;
         if (sh < 2f) sh = 2f;
         float cx = px;

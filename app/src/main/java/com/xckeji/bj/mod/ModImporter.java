@@ -197,10 +197,31 @@ public class ModImporter {
         Matcher m = Pattern.compile(
                 "<Image\\s+name=\"([^\"]+)\"\\s+x=\"(\\d+)\"\\s+y=\"(\\d+)\"\\s+w=\"(\\d+)\"\\s+h=\"(\\d+)\"")
                 .matcher(xml);
+        // 有些模组图集（例如光宇3.0 的 image_flags_hd）实际位图比 xml 布局大（@2x 之类），
+        // 这里按「xml 推断尺寸 vs 实际位图尺寸」自动求缩放系数再裁，避免裁错整张图。
+        float scale = 1f;
+        {
+            int maxX = 0, maxY = 0;
+            Matcher mm = Pattern.compile("<Image\\s+name=\"[^\"]+\"\\s+x=\"(\\d+)\"\\s+y=\"(\\d+)\"\\s+w=\"(\\d+)\"\\s+h=\"(\\d+)\"")
+                    .matcher(xml);
+            while (mm.find()) {
+                maxX = Math.max(maxX, Integer.parseInt(mm.group(1)) + Integer.parseInt(mm.group(3)));
+                maxY = Math.max(maxY, Integer.parseInt(mm.group(2)) + Integer.parseInt(mm.group(4)));
+            }
+            if (maxX > 0 && maxY > 0) {
+                float sx = atlasBmp.getWidth() / (float) maxX;
+                float sy = atlasBmp.getHeight() / (float) maxY;
+                if (Math.abs(sx - sy) / Math.max(sx, sy) < 0.05f && (sx > 1.02f || sx < 0.98f)) {
+                    scale = (sx + sy) / 2f;
+                }
+            }
+        }
         while (m.find()) {
             String name = m.group(1);
-            int x = Integer.parseInt(m.group(2)), y = Integer.parseInt(m.group(3));
-            int w = Integer.parseInt(m.group(4)), h = Integer.parseInt(m.group(5));
+            int x = Math.round(Integer.parseInt(m.group(2)) * scale);
+            int y = Math.round(Integer.parseInt(m.group(3)) * scale);
+            int w = Math.round(Integer.parseInt(m.group(4)) * scale);
+            int h = Math.round(Integer.parseInt(m.group(5)) * scale);
             if (x < 0 || y < 0 || w <= 0 || h <= 0
                     || x + w > atlasBmp.getWidth() || y + h > atlasBmp.getHeight()) continue;
             String target = builtinIndex.get(name.toLowerCase());
