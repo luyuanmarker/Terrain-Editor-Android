@@ -36,6 +36,7 @@ public class ModImporter {
         public int images;        // 切出来的单张图
         public int copied;        // 直接拷过来的文件（json/单图）
         public int skipped;       // 内置里没有对应文件的（用不到）
+        public File dir;          // 素材落地的模组目录
         public final List<String> atlasInfo = new ArrayList<>();
         public boolean ok() { return error == null && name != null; }
         public String summary() {
@@ -46,8 +47,27 @@ public class ModImporter {
             if (skipped > 0) sb.append("（" ).append(skipped).append(" 张内置用不到的跳过）");
             sb.append("\n");
             for (String s : atlasInfo) sb.append("· ").append(s).append("\n");
+            sb.append("\n【素材落盘统计】\n").append(countText(dir));
             return sb.toString();
         }
+    }
+
+    /** 模组目录里各类素材的数量（导入报告和模组页诊断都用它）。 */
+    public static String countText(File dir) {
+        if (dir == null || !dir.isDirectory()) return "（模组目录不存在）";
+        return "国旗 " + countFiles(new File(dir, "flag")) + " 面"
+                + "　兵种图标 " + countFiles(new File(dir, "legion")) + " 个"
+                + "　建筑 " + countFiles(new File(dir, "building")) + " 个"
+                + "\n地形贴图 " + countFiles(new File(dir, "map")) + " 张"
+                + "　设施 " + countFiles(new File(dir, "image/status")) + " 个"
+                + "　将领头像 " + countFiles(new File(dir, "general")) + " 张"
+                + "　配置 " + countFiles(new File(dir, "json")) + " 个"
+                + "　底图 " + countFiles(new File(dir, "bin")) + " 个";
+    }
+
+    private static int countFiles(File d) {
+        File[] fs = d.listFiles();
+        return fs == null ? 0 : fs.length;
     }
 
     /** 要切图的图集（名字 = assets 里 xml/webp 的文件名主干）。 */
@@ -81,6 +101,7 @@ public class ModImporter {
             File modDir = new File(ModAssets.modsBase(ctx), modName);
             if (modDir.exists()) ModAssets.delete(ctx, modName);
             if (!modDir.exists() && !modDir.mkdirs()) { r.error = "无法创建模组目录"; return r; }
+            r.dir = modDir;
 
             // 记住模组位置，供「打开模组地图 / 保存回写」用
             SharedPreferences sp = ctx.getSharedPreferences("mod_prefs", Context.MODE_PRIVATE);
@@ -285,6 +306,7 @@ public class ModImporter {
             File modDir = new File(ModAssets.modsBase(ctx), modName);
             if (modDir.exists()) ModAssets.delete(ctx, modName);
             if (!modDir.exists() && !modDir.mkdirs()) { r.error = "无法创建模组目录"; return r; }
+            r.dir = modDir;
 
             java.util.Set<String> want = new java.util.HashSet<>();
             for (String a : ATLASES) {

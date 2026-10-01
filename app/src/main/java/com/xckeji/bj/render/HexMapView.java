@@ -140,6 +140,8 @@ public class HexMapView extends View {
             legionBmps = new HashMap<>();
             flagBmps = new HashMap<>();
             buildingBmps = new HashMap<>();
+            // 国旗优先加载：后面任何一段出问题都不该连累国旗显示
+            loadAllFlags();
             landBmp = load("map/land.png");
             seaBmp = load("map/sea.png");
             trapLandBmp = load("pixmap/buildmark/land_trap.png");
@@ -167,13 +169,6 @@ public class HexMapView extends View {
                 if (b != null) legionBmps.put(i, b);
                 Bitmap br = load("legion/legion_icon_r_" + i + ".png");
                 if (br != null) legionBmpsR.put(i, br);
-            }
-            // 国旗：按实际存在的编号加载（模组的国家国旗可能到 90 多号）
-            java.util.TreeSet<Integer> flagIds = com.xckeji.bj.mod.ModAssets.idsIn(getContext(), "flag", "flag_");
-            if (flagIds.isEmpty()) for (int i = 1; i <= 48; i++) flagIds.add(i);
-            for (int i : flagIds) {
-                Bitmap b = load("flag/flag_" + i + ".png");
-                if (b != null) flagBmps.put(i, b);
             }
             borderSelectedBmp = BitmapFactory.decodeResource(getResources(), R.drawable.border_selected);
             for (int i = 0; i < IGS.length; i++) {
@@ -585,6 +580,24 @@ public class HexMapView extends View {
         drawGuideImage(canvas);
     }
 
+    /** 加载全部国旗（模组目录 + 内置 assets 的编号并集）。 */
+    private void loadAllFlags() {
+        if (flagBmps == null) flagBmps = new HashMap<>();
+        java.util.TreeSet<Integer> flagIds = com.xckeji.bj.mod.ModAssets.idsIn(getContext(), "flag", "flag_");
+        if (flagIds.isEmpty()) for (int i = 1; i <= 48; i++) flagIds.add(i);
+        int ok = 0;
+        for (int i : flagIds) {
+            Bitmap b = load("flag/flag_" + i + ".png");
+            if (b != null) { flagBmps.put(i, b); ok++; }
+        }
+        android.util.Log.i("MOD", "国旗加载：候选 " + flagIds.size() + " 个，成功 " + ok + " 个");
+    }
+
+    /** 当前已加载的国旗数量（供「模组」页诊断显示）。 */
+    public int loadedFlagCount() {
+        return flagBmps == null ? 0 : flagBmps.size();
+    }
+
     /**
      * 取国旗位图：**按国家 ID** 找 flag_&lt;ID&gt;.png（模组的国旗编号就是国家ID）。
      * 注意不要用 CountrySettings.json 的 Logo 兜底——模组里「俄罗斯」Id=66 的 Logo 写的是 5（苏联），
@@ -592,7 +605,8 @@ public class HexMapView extends View {
      */
     private Bitmap flagFor(int country) {
         if (country <= 0) return null;
-        Bitmap b = flagBmps == null ? null : flagBmps.get(country);
+        if (flagBmps == null) flagBmps = new HashMap<>();
+        Bitmap b = flagBmps.get(country);
         if (b == null) {
             b = load("flag/flag_" + country + ".png");
             if (b != null && flagBmps != null) flagBmps.put(country, b);

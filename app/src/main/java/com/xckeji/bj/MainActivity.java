@@ -4438,6 +4438,38 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         curTv.setPadding(0, (int) (8 * dp), 0, (int) (6 * dp));
         root.addView(curTv);
 
+        // 诊断信息：一眼看出素材到底导进来了没有、当前地图用到的国家有没有旗
+        TextView diag = new TextView(this);
+        StringBuilder db = new StringBuilder();
+        if (cur == null) {
+            db.append("当前使用内置素材（没有导入模组）");
+        } else {
+            java.io.File md = new java.io.File(com.xckeji.bj.mod.ModAssets.modsBase(this), cur);
+            db.append(com.xckeji.bj.mod.ModImporter.countText(md));
+            db.append("\n素材目录：").append(md.getAbsolutePath());
+            if (hexMapView != null) db.append("\n编辑器已加载国旗：").append(hexMapView.loadedFlagCount()).append(" 面");
+            if (mapData != null && mapData.legionCountries != null && mapData.legionCountries.length > 0) {
+                java.util.TreeSet<Integer> need = new java.util.TreeSet<>();
+                for (int i = 0; i < mapData.legionCountries.length; i++) {
+                    if (mapData.legionCountries[i] > 0) need.add(mapData.legionCountries[i]);
+                }
+                int have = 0;
+                StringBuilder miss = new StringBuilder();
+                for (int c : need) {
+                    if (com.xckeji.bj.mod.ModAssets.inMod("flag/flag_" + c + ".png")) have++;
+                    else if (miss.length() < 60) miss.append(c).append(" ");
+                }
+                db.append("\n当前地图军团国家 ").append(need.size()).append(" 个，模组里有旗的 ")
+                        .append(have).append(" 个");
+                if (miss.length() > 0) db.append("；缺旗国家ID：").append(miss);
+            }
+        }
+        diag.setText(db.toString());
+        diag.setTextSize(11);
+        diag.setTextColor(0xFF6b7280);
+        diag.setPadding(0, (int) (6 * dp), 0, 0);
+        root.addView(diag);
+
         LinearLayout tools = new LinearLayout(this);
         tools.setOrientation(LinearLayout.HORIZONTAL);
         addSmallLightBtn(tools, "＋ 导入模组（文件夹）", 0xFF1e5fa8, dp, () -> {
