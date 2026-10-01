@@ -2735,10 +2735,10 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         floatSave.setOnClickListener(v -> saveFile());
         leftPanel.addView(floatOpen);
         leftPanel.addView(floatSave);
-        // 官方地图编辑器“导出测试BTL和底图”按钮
-        Button exportTestBtn = makeFloatBtn("导出测试BTL和底图", 0xFF8B5CF6);
-        exportTestBtn.setOnClickListener(v -> exportTestConquest());
-        leftPanel.addView(exportTestBtn);
+        // 返回主页（原“导出测试BTL和底图”的位置）
+        Button homeFloatBtn = makeFloatBtn("返回主页", 0xFF8B5CF6);
+        homeFloatBtn.setOnClickListener(v -> backToHome());
+        leftPanel.addView(homeFloatBtn);
         // “显示省区规划”开关：放在保存下方（战役/征服模式下左侧面板只保留 保存 + 本开关）
         provinceShowBtn = makeFloatBtn("显示省区规划：关", 0xFF7C3AED);
         provinceShowBtn.setOnClickListener(v -> {
@@ -3628,11 +3628,6 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         bar.setBackgroundColor(Color.parseColor("#1a1a3e"));
         bar.setPadding(8, 0, 8, 0);
         bar.setGravity(Gravity.CENTER_VERTICAL);
-
-        // 「主页」按钮放最左边：随时一键回首页（和刚打开 App 一样）
-        Button homeBtn = makeTopBtn("主页");
-        homeBtn.setOnClickListener(v -> backToHome());
-        bar.addView(homeBtn); bar.addView(spacer(4));
 
         // 撤销按钮；音乐/音效与打开/保存已移到左侧浮动按钮
         undoBtn = makeTopBtn("撤销");
