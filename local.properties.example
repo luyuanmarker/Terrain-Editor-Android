@@ -1,0 +1,5 @@
+# Example local.properties for Android SDK location
+# Copy this file to local.properties and set the correct path for your machine.
+# Do NOT commit local.properties with machine-specific paths to public repositories.
+
+sdk.dir=/path/to/Android/sdk

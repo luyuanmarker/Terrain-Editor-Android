@@ -1,0 +1,221 @@
+package com.xckeji.bj.mod;
+
+import android.content.Context;
+import android.content.SharedPreferences;
+import android.net.Uri;
+import android.provider.DocumentsContract;
+
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.OutputStream;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Date;
+import java.util.List;
+import java.util.Locale;
+
+/**
+ * 模组里的地图（assets/stage/*.btl）：列表、读取、保存回写、自动备份。
+ * 用 SAF 的树 URI 直接读/写模组文件夹，不复制那 1000 多个 btl。
+ */
+public class ModMaps {
+
+    public static class Entry {
+        public final String name;      // stage10103.btl
+        public final String docId;
+        public Entry(String name, String docId) { this.name = name; this.docId = docId; }
+        public String kind() {
+            String n = name.toLowerCase(Locale.US);
+            if (n.startsWith("conquest")) return "征服";
+            if (n.startsWith("event")) return "事件";
+            if (n.startsWith("stage")) return "战役";
+            return "其他";
+        }
+    }
+
+    private ModMaps() {}
+
+    private static SharedPreferences prefs(Context ctx) {
+        return ctx.getSharedPreferences("mod_prefs", Context.MODE_PRIVATE);
+    }
+
+    public static Uri modUri(Context ctx, String modName) {
+        String s = prefs(ctx).getString("uri_" + modName, null);
+        return s == null ? null : Uri.parse(s);
+    }
+
+    private static String rootDocId(Context ctx, String modName) {
+        return prefs(ctx).getString("rootdoc_" + modName, null);
+    }
+
+    private static String stageDocId(Context ctx, String modName) {
+        String cached = prefs(ctx).getString("stagedoc_" + modName, null);
+        if (cached != null) return cached;
+        Uri tree = modUri(ctx, modName);
+        if (tree == null) return null;
+        String root = rootDocId(ctx, modName);
+        if (root == null) root = DocumentsContract.getTreeDocumentId(tree);
+        String doc = ModImporter.findDocIdPublic(ctx, tree, root, "stage");
+        if (doc != null) prefs(ctx).edit().putString("stagedoc_" + modName, doc).apply();
+        return doc;
+    }
+
+    /** 列出模组的 assets/stage/ 里所有 btl。 */
+    public static List<Entry> list(Context ctx, String modName) {
+        List<Entry> out = new ArrayList<>();
+        Uri tree = modUri(ctx, modName);
+        if (tree == null) return out;
+        String stage = stageDocId(ctx, modName);
+        if (stage == null) return out;
+        for (String[] child : ModImporter.listChildren(ctx, tree, stage)) {
+            if (child[0].toLowerCase(Locale.US).endsWith(".btl")) out.add(new Entry(child[0], child[1]));
+        }
+        Collections.sort(out, (a, b) -> a.name.compareToIgnoreCase(b.name));
+        return out;
+    }
+
+    /** 读取一条地图的字节。 */
+    public static byte[] read(Context ctx, String modName, Entry e) throws Exception {
+        Uri tree = modUri(ctx, modName);
+        if (tree == null) throw new Exception("模组位置已失效，请重新导入模组");
+        return ModImporter.readDoc(ctx, tree, e.docId);
+    }
+
+    /**
+     * 找模组里的世界底图：按 config/def_map.xml 里「地图序号 → 文件名」查，
+     * 找不到就按 world{N}.bin / world.bin 兜底。文件放在导入时的 bin/ 目录（导入时已拷好）。
+     */
+    public static byte[] findWorldBin(Context ctx, String modName, int mapId) {
+        File dir = new File(ModAssets.modsBase(ctx), modName);
+        String fromDef = defMapFile(ctx, modName, mapId);
+        List<String> names = new ArrayList<>();
+        if (fromDef != null) names.add(fromDef);
+        if (mapId > 0) names.add("world" + mapId + ".bin");
+        names.add("world.bin");
+        for (String n : names) {
+            File f = new File(new File(dir, "bin"), n);
+            if (f.isFile()) {
+                try {
+                    byte[] d = new byte[(int) f.length()];
+                    java.io.FileInputStream in = new java.io.FileInputStream(f);
+                    try {
+                        int off = 0, r;
+                        while (off < d.length && (r = in.read(d, off, d.length - off)) > 0) off += r;
+                    } finally { ModAssets.close(in); }
+                    return d;
+                } catch (Exception ignored) { }
+            }
+        }
+        return null;
+    }
+
+    /** 解析模组 config/def_map.xml 里该地图序号对应的底图文件名。 */
+    private static String defMapFile(Context ctx, String modName, int mapId) {
+        try {
+            File f = new File(new File(ModAssets.modsBase(ctx), modName), "config/def_map.xml");
+            if (!f.isFile()) return null;
+            byte[] d = new byte[(int) f.length()];
+            java.io.FileInputStream in = new java.io.FileInputStream(f);
+            try {
+                int off = 0, r;
+                while (off < d.length && (r = in.read(d, off, d.length - off)) > 0) off += r;
+            } finally { ModAssets.close(in); }
+            String xml = new String(d, "UTF-8");
+            java.util.regex.Matcher m = java.util.regex.Pattern
+                    .compile("<map\\s+id=\"" + mapId + "\"[^>]*file=\"([^\"]+)\"").matcher(xml);
+            if (m.find()) return m.group(1);
+        } catch (Exception ignored) { }
+        return null;
+    }
+
+    /**
+     * 保存回写：先备份到 /sdcard/地图编辑器/模组备份/&lt;模组名&gt;/&lt;文件名&gt;.&lt;时间&gt;.bak，
+     * 再把新内容覆盖回模组里的那个 btl。返回备份文件路径（失败返回 null）。
+     */
+    public static String writeBack(Context ctx, String modName, Entry e, byte[] data, byte[] originalBytes) {
+        String backupPath = backupBytes(ctx, modName, e.name, originalBytes);
+        try {
+            Uri tree = modUri(ctx, modName);
+            if (tree == null) return backupPath;
+            Uri doc = DocumentsContract.buildDocumentUriUsingTree(tree, e.docId);
+            OutputStream out = ctx.getContentResolver().openOutputStream(doc, "wt");
+            if (out == null) out = ctx.getContentResolver().openOutputStream(doc);
+            if (out == null) return backupPath;
+            try {
+                out.write(data);
+                out.flush();
+            } finally {
+                ModAssets.close(out);
+            }
+        } catch (Exception ignored) { }
+        return backupPath;
+    }
+
+    /** 备份一段文件内容到 地图编辑器/模组备份/&lt;模组名&gt;/，返回备份文件路径。 */
+    public static String backupBytes(Context ctx, String modName, String fileName, byte[] bytes) {
+        if (bytes == null || bytes.length == 0) return null;
+        try {
+            File dir = new File(android.os.Environment.getExternalStorageDirectory(),
+                    "地图编辑器/模组备份/" + modName);
+            if (!dir.exists()) dir.mkdirs();
+            String ts = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date());
+            File bak = new File(dir, fileName + "." + ts + ".bak");
+            FileOutputStream fos = new FileOutputStream(bak);
+            try { fos.write(bytes); } finally { ModAssets.close(fos); }
+            return bak.getAbsolutePath();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * 把当前编辑的文件存进「已选中的模组」：
+     * btl → 模组 assets/stage/ 下（同名就覆盖，覆盖前自动备份；没有就新建），bin → 模组 assets/ 根目录。
+     * 返回一句给用户看的提示（失败返回 null）。
+     */
+    public static String saveIntoMod(Context ctx, String modName, String fileName, byte[] data) {
+        Uri tree = modUri(ctx, modName);
+        if (tree == null) return null;
+        try {
+            String rootDoc = rootDocId(ctx, modName);
+            if (rootDoc == null) rootDoc = DocumentsContract.getTreeDocumentId(tree);
+            boolean isBin = fileName.toLowerCase(Locale.US).endsWith(".bin");
+            String parent = rootDoc;
+            String where = "";
+            if (!isBin) {
+                String stage = stageDocId(ctx, modName);
+                if (stage == null) return null;
+                parent = stage;
+                where = "assets/stage/";
+            }
+            String exist = ModImporter.findFilePublic(ctx, tree, parent, fileName);
+            String backup = null;
+            Uri target;
+            if (exist != null) {
+                byte[] old = ModImporter.readDoc(ctx, tree, exist);
+                backup = backupBytes(ctx, modName, fileName, old);
+                target = DocumentsContract.buildDocumentUriUsingTree(tree, exist);
+            } else {
+                Uri parentUri = DocumentsContract.buildDocumentUriUsingTree(tree, parent);
+                target = DocumentsContract.createDocument(ctx.getContentResolver(), parentUri,
+                        "application/octet-stream", fileName);
+            }
+            if (target == null) return null;
+            OutputStream out = ctx.getContentResolver().openOutputStream(target, "wt");
+            if (out == null) out = ctx.getContentResolver().openOutputStream(target);
+            if (out == null) return null;
+            try {
+                out.write(data);
+                out.flush();
+            } finally {
+                ModAssets.close(out);
+            }
+            return "已保存进模组「" + modName + "」：" + where + fileName
+                    + (backup != null ? "\n原文件已备份：" + backup : "\n（该文件原本不存在，已新建）");
+        } catch (Exception e) {
+            return null;
+        }
+    }
+}
