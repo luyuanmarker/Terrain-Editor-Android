@@ -5267,18 +5267,186 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         cityNames = new java.util.HashMap<>();
         try {
             byte[] b = readGameJson("city_names.json");
-            if (b == null) b = readGameJson("CitySettings.json");
             if (b == null) b = readAssetBytes("json/city_names.json");
             if (b != null) {
+                // ★ 内置表是 {"city_names": { "1":"伦敦", ... }} —— 外面还包了一层，
+                //   老代码只遍历顶层键，拿到 "city_names" 这个字符串、parseInt 失败，
+                //   结果整张表是空的，地图上从来没有城市名。这里改成递归展开，
+                //   同时兼容「平铺的 {id:名字}」和「再包一层」两种写法。
                 org.json.JSONObject o = new org.json.JSONObject(new String(b, "UTF-8"));
-                java.util.Iterator<String> it = o.keys();
-                while (it.hasNext()) {
-                    String k = it.next();
-                    try { cityNames.put(Integer.parseInt(k), o.getString(k)); } catch (Exception ignored) { }
-                }
+                putCityNamesDeep(o, cityNames);
             }
         } catch (Exception ignored) { }
+        if (cityNames.isEmpty()) {
+            // 兜底：游戏目录里的 CitySettings.json 是对象列表（没有 Name 字段），
+            // 这里只用来读 Id，名字仍取内置表；读不到就算了，不影响打开地图。
+            try {
+                byte[] b = readGameJson("CitySettings.json");
+                if (b != null) {
+                    org.json.JSONArray arr = new org.json.JSONArray(new String(b, "UTF-8"));
+                    for (int i = 0; i < arr.length(); i++) {
+                        org.json.JSONObject c = arr.optJSONObject(i);
+                        if (c == null) continue;
+                        int id = c.optInt("Id", 0);
+                        String nm = c.optString("Name", "");
+                        if (id > 0 && !nm.isEmpty()) cityNames.put(id, nm);
+                    }
+                }
+            } catch (Exception ignored) { }
+        }
         return cityNames;
+    }
+
+    /** 递归展开城市名表：{id:名字} 或 {"city_names":{id:名字}} 都能读。 */
+    private static void putCityNamesDeep(org.json.JSONObject o, java.util.Map<Integer, String> out) {
+        if (o == null) return;
+        java.util.Iterator<String> it = o.keys();
+        while (it.hasNext()) {
+            String k = it.next();
+            org.json.JSONObject sub = o.optJSONObject(k);
+            if (sub != null) { putCityNamesDeep(sub, out); continue; }
+            String v = o.optString(k, "");
+            if (v.isEmpty()) continue;
+            try { out.put(Integer.parseInt(k), v); } catch (Exception ignored) { }
+        }
+    }
+
+    /** 城市名显示文本：建筑 0x02 名称字段 = city_names 的 id。 */
+    private String cityNameLabel(int id) {
+        if (id <= 0) return "未命名（点这里选）";
+        java.util.Map<Integer, String> m = loadCityNames();
+        String n = m.get(id);
+        return (n == null ? ("未收录 #" + id) : n + " #" + id);
+    }
+
+    /** 城市名选择悬浮窗：搜索 + 列表点选（0 = 未命名）。 */
+    private void showCityNamePicker(final int curId, final java.util.function.IntConsumer onPick) {
+        final java.util.Map<Integer, String> names = loadCityNames();
+        if (names == null || names.isEmpty()) {
+            Toast.makeText(this, "没读到城市名表（city_names.json）", Toast.LENGTH_LONG).show();
+            return;
+        }
+        final java.util.List<Integer> ids = new java.util.ArrayList<>(names.keySet());
+        java.util.Collections.sort(ids);
+        final java.util.List<Integer> shown = new java.util.ArrayList<>(ids);
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(16, 10, 16, 10);
+        EditText search = new EditText(this);
+        search.setHint("搜索城市名 / 编号");
+        styleDialogEdit(search);
+        final android.widget.ListView lv = new android.widget.ListView(this);
+        final android.widget.BaseAdapter adapter = new android.widget.BaseAdapter() {
+            @Override public int getCount() { return shown.size(); }
+            @Override public Object getItem(int i) { return shown.get(i); }
+            @Override public long getItemId(int i) { return shown.get(i); }
+            @Override public View getView(int i, View cv, android.view.ViewGroup p) {
+                TextView tv = (cv instanceof TextView) ? (TextView) cv : new TextView(MainActivity.this);
+                int id = shown.get(i);
+                tv.setText(names.get(id) + "   #" + id + (id == curId ? "  ✓ 当前" : ""));
+                tv.setTextSize(15);
+                tv.setTextColor(id == curId ? 0xFF22C55E : Color.WHITE);
+                tv.setPadding(8, 20, 8, 20);
+                return tv;
+            }
+        };
+        lv.setAdapter(adapter);
+        search.addTextChangedListener(new android.text.TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
+            @Override public void onTextChanged(CharSequence s, int a, int b, int c) { }
+            @Override public void afterTextChanged(android.text.Editable e) {
+                String q = e.toString().trim().toLowerCase();
+                shown.clear();
+                for (int id : ids) {
+                    String nm = names.get(id);
+                    if (q.isEmpty() || (nm != null && nm.toLowerCase().contains(q))
+                            || String.valueOf(id).contains(q)) shown.add(id);
+                }
+                adapter.notifyDataSetChanged();
+            }
+        });
+        root.addView(search);
+        root.addView(lv, new LinearLayout.LayoutParams(-1, 0, 1f));
+        AlertDialog.Builder b = new AlertDialog.Builder(this, R.style.DarkDialog);
+        b.setTitle("选择城市名（共 " + names.size() + " 个）");
+        b.setView(root);
+        b.setNeutralButton("清除（未命名）", (d, w) -> onPick.accept(0));
+        b.setNegativeButton("取消", null);
+        final AlertDialog dlg = b.create();
+        dlg.show();
+        lv.setOnItemClickListener((p, v, pos, id) -> {
+            onPick.accept(shown.get(pos));
+            dlg.dismiss();
+        });
+    }
+
+    /**
+     * 一键补城市名：把「城市类（类型 11~19）」且名称=0 的建筑，按城市名表顺序补上没用过的名字。
+     * 已经有好名字的一个都不改；风车/工厂/军港这些非城市建筑也不动。
+     */
+    private void fillCityNamesDialog() {
+        if (mapData == null || mapData.buildings == null) {
+            Toast.makeText(this, "请先加载地图", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        final java.util.Map<Integer, String> names = loadCityNames();
+        if (names == null || names.isEmpty()) {
+            Toast.makeText(this, "没读到城市名表（city_names.json）", Toast.LENGTH_LONG).show();
+            return;
+        }
+        final boolean onlySel = mapData.multiSelectMode && mapData.hasSelectedBlocks();
+        final java.util.List<MapData.Building> targets = new java.util.ArrayList<>();
+        final java.util.Set<Integer> used = new java.util.HashSet<>();
+        int cityCount = 0;
+        for (MapData.Building b : mapData.buildings) {
+            if (b == null || b.raw == null || b.raw.length < 5) continue;
+            int nm = (b.raw[2] & 0xFF) | ((b.raw[3] & 0xFF) << 8);
+            int type = b.raw[4] & 0xFF;
+            if (type >= 11 && type <= 19) cityCount++;
+            if (nm != 0) { used.add(nm); continue; }
+            if (type < 11 || type > 19) continue;
+            if (onlySel && !mapData.selectedBlocks.contains(b.y * mapData.width + b.x)) continue;
+            targets.add(b);
+        }
+        if (targets.isEmpty()) {
+            Toast.makeText(this, onlySel ? "选中的格子里没有「没名字的城市」" : "本图没有「没名字的城市」",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        new AlertDialog.Builder(this, R.style.DarkDialog)
+                .setTitle("一键补城市名")
+                .setMessage("本图城市 " + cityCount + " 个，其中 " + targets.size() + " 个没有名字"
+                        + (onlySel ? "（只补选中格子里的）" : "") + "。\n\n"
+                        + "会从城市名表（" + names.size() + " 个）里按顺序挑还没被用过的名字补上；"
+                        + "已经有名的一个都不改，风车/工厂/军港也不动。")
+                .setPositiveButton("补上", (d, w) -> {
+                    try {
+                        history.save(mapData, "一键补城市名");
+                        final java.util.List<Integer> pool = new java.util.ArrayList<>(names.keySet());
+                        java.util.Collections.sort(pool);
+                        int p = 0, n = 0;
+                        for (MapData.Building b : targets) {
+                            while (p < pool.size() && used.contains(pool.get(p))) p++;
+                            if (p >= pool.size()) break;
+                            int id = pool.get(p++);
+                            used.add(id);
+                            try {
+                                byte[] raw = b.raw.clone();
+                                writeArmyField(raw, 0x2, "u16", id);
+                                FileParser.patchBuilding(mapData, b, raw);
+                                b.raw = raw;
+                                n++;
+                            } catch (Exception ignored) { }
+                        }
+                        hexMapView.refresh();
+                        updateInfo();
+                        Toast.makeText(this, "✓ 已补上 " + n + " 个城市名", Toast.LENGTH_LONG).show();
+                    } catch (Exception e) {
+                        Toast.makeText(this, "补名失败：" + e.getMessage(), Toast.LENGTH_LONG).show();
+                    }
+                })
+                .setNegativeButton("取消", null)
+                .show();
     }
 
     /** 从 assets/flag/ 加载国家国旗：国家 ID -> flag_N.png（加载一次缓存复用）。 */
@@ -6594,8 +6762,9 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
         final View[] ref = new View[1];
         LinearLayout card = buildPanelCard("地图功能",
                 "当前地图：" + mapData.width + "×" + mapData.height, () -> dismissPanel(ref[0]));
-        String[] names = {"导入底图…", "校验并修复…", "扩展地图…", "截取地图…", "随机外观（全局）…", "省区功能…"};
-        int[] colors = {0xFF22C55E, 0xFF0EA5E9, UI_PRIMARY, 0xFF8B5CF6, UI_ACCENT, 0xFF7C3AED};
+        String[] names = {"导入底图…", "校验并修复…", "扩展地图…", "截取地图…", "随机外观（全局）…", "省区功能…",
+                "城市名补全…"};
+        int[] colors = {0xFF22C55E, 0xFF0EA5E9, UI_PRIMARY, 0xFF8B5CF6, UI_ACCENT, 0xFF7C3AED, 0xFFF59E0B};
         Runnable[] acts = {
                 () -> enterGuidePage(),          // ★ 导入底图 → 进新页面
                 () -> validateAndFixDialog(),
@@ -6603,6 +6772,7 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
                 () -> startCropSelect(),
                 () -> randomizeTerrainAppearance(),
                 () -> showProvincePanel(),
+                () -> fillCityNamesDialog(),     // ★ 城市名补全
         };
         for (int i2 = 0; i2 < names.length; i2++) {
             final int idx = i2;
@@ -8118,6 +8288,25 @@ public class MainActivity extends Activity implements HexMapView.OnTileSelectLis
             et.setTextSize(14);
             et.setBackgroundColor(Color.parseColor("#1e293b"));
             et.setLayoutParams(new LinearLayout.LayoutParams(140, -2));
+            // 「名称」改成城市名选择器（0x02 名称字段 = city_names 的 id，手填数字根本不知道是谁）
+            if (fname.startsWith("名称")) {
+                final Button nmBtn = new Button(this);
+                nmBtn.setText(cityNameLabel(readArmyField(b.raw, 0x2, "u16")));
+                nmBtn.setTextSize(13);
+                nmBtn.setAllCaps(false);
+                nmBtn.setTextColor(Color.WHITE);
+                nmBtn.setBackgroundColor(Color.parseColor("#334155"));
+                nmBtn.setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1.6f));
+                nmBtn.setOnClickListener(v -> showCityNamePicker(readArmyField(b.raw, 0x2, "u16"), id -> {
+                    writeArmyField(b.raw, 0x2, "u16", id);
+                    nmBtn.setText(cityNameLabel(id));
+                    if (saveRef[0] != null) saveRef[0].performClick();   // 改了即保存
+                }));
+                row.addView(nmBtn);
+                buildingEds[i] = null;
+                l.addView(row);
+                continue;
+            }
             // 「关键据点」改成下拉（0无 / 1红 / 2绿），选完即时保存
             if (fname.startsWith("关键据点")) {
                 final int offK = off;
